@@ -12,6 +12,25 @@ Or install individual skills:
 npx skills add https://github.com/ulpi-io/skills --skill browse
 ```
 
+## Skills
+
+| Skill | What it does |
+|-------|-------------|
+| [browse](#browse) | Headless browser CLI — 48 commands, ref-based interaction, 13x fewer tokens than @playwright/mcp |
+| [codemap](#codemap) | Code search + architecture analysis — hybrid vector/BM25, dependency graphs, PageRank |
+| [plan-to-task-list-with-dag](#plan-to-task-list-with-dag) | Decompose features into parallel-ready task DAGs |
+| [map-project](#map-project) | Generate CLAUDE.md from codebase scan |
+| [map-project-monorepo](#map-project-monorepo) | Per-package CLAUDE.md for monorepos |
+| [cost-estimate](#cost-estimate) | Estimate dev cost of repo, branch, or commit |
+| [pr-retro](#pr-retro) | Branch retrospective with merge readiness verdict |
+| [branch-review-before-pr](#branch-review-before-pr) | Structural review — race conditions, trust boundaries |
+| [find-bugs](#find-bugs) | Security audit + bug finding on branch diff |
+| [code-simplify](#code-simplify) | Review code for reuse, quality, efficiency |
+| [frontend-design-ui-ux](#frontend-design-ui-ux) | UI/UX design specs and component briefs |
+| [update-claude-learnings](#update-claude-learnings) | Extract behavioral learnings to CLAUDE.md |
+| [update-agent-learnings](#update-agent-learnings) | Propagate learnings to agent files |
+| [update-skill-learnings](#update-skill-learnings) | Propagate learnings to skill files |
+
 ---
 
 ## browse
