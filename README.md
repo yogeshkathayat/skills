@@ -3,7 +3,7 @@
 Skills for AI coding agents. Works with [skills.sh](https://skills.sh) — install with one command, works across Claude Code, Cursor, Cline, Windsurf, and 15+ other agents.
 
 ```bash
-npx skills add ulpi-io/skills
+npx skills add https://github.com/ulpi-io/skills
 ```
 
 ## browse
@@ -31,7 +31,7 @@ browse text                                # → clean visible text, no HTML
 bun install -g @ulpi/browse
 
 # Or just the skill (CLI must be installed separately)
-npx skills add ulpi-io/skills -s browse
+npx skills add https://github.com/ulpi-io/skills --skill browse
 ```
 
 [Full docs and benchmarks →](https://github.com/ulpi-io/browse)
@@ -67,7 +67,7 @@ npm install -g @ulpi/codemap
 claude mcp add codemap codemap serve
 
 # Or just the skill
-npx skills add ulpi-io/skills -s codemap
+npx skills add https://github.com/ulpi-io/skills --skill codemap
 ```
 
 [Full docs →](https://github.com/ulpi-io/codemap)
