@@ -35,6 +35,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [create-pr](#create-pr) | Auto-generate PR title/body, push, create via gh |
 | [git-merge-expert](#git-merge-expert) | Merge branches, resolve conflicts, rollback |
 | [git-merge-expert-worktree](#git-merge-expert-worktree) | Isolated merges in git worktrees |
+| [plan-founder-review](#plan-founder-review) | Technical founder review of a plan before execution |
 
 ---
 
@@ -207,3 +208,11 @@ Expert in merge strategies, conflict resolution, PR readiness checks, rollback, 
 **Isolated merges in git worktrees.**
 
 Same merge expertise but in isolated worktrees — worktree lifecycle management, parallel worktree operations, and cleanup automation. For when you need merge isolation without touching the working directory.
+
+---
+
+## plan-founder-review
+
+**Technical founder review of a plan before execution.**
+
+Reads a plan from `plans/<name>.md`, verifies file paths exist, challenges scope and architecture decisions, audits risk coverage and test gaps, scores sections, and delivers a verdict — APPROVE / REVISE / REJECT. Quality gate between planning and execution.
