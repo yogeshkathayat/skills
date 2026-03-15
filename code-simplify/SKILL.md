@@ -1,12 +1,16 @@
+---
+name: code-simplify
+description: |
+  Review changed code for reuse, quality, and efficiency. Analyzes for unnecessary complexity,
+  redundant abstractions, deep nesting, and unclear naming, then applies targeted simplifications
+  while preserving all behavior. Invoke via /code-simplify or when user says "simplify this",
+  "clean up this code", "make this simpler", "reduce complexity".
+---
+
 <!--
 Based on Anthropic's code-simplifier subagent:
 https://github.com/anthropics/claude-plugins-official/blob/main/plugins/code-simplifier/agents/code-simplifier.md
 -->
-
----
-name: code-simplify
-description: Use when the user asks to simplify, clean up, or improve clarity of code. Analyzes code for unnecessary complexity, redundant abstractions, deep nesting, and unclear naming, then applies targeted simplifications while preserving all behavior. Invoke via /code-simplify or when user says "simplify this", "clean up this code", "make this simpler", "reduce complexity".
----
 
 <EXTREMELY-IMPORTANT>
 Before simplifying ANY code, you **ABSOLUTELY MUST**:
