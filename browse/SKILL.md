@@ -1,6 +1,6 @@
 ---
 name: browse
-version: 2.2.0
+version: 2.3.0
 description: |
   Fast web browsing for AI coding agents via persistent headless Chromium daemon. Navigate to any URL,
   read page content, click elements, fill forms, run JavaScript, take screenshots,
@@ -13,7 +13,7 @@ allowed-tools:
 
 ---
 
-# browse: Persistent Browser for Claude Code
+# browse: Persistent Browser for AI Coding Agents
 
 Persistent headless Chromium daemon. First call auto-starts the server (~3s).
 Every subsequent call: ~100-200ms. Auto-shuts down after 30 min idle.
@@ -74,7 +74,7 @@ If the file is missing or does not contain browse permission rules in `permissio
 "Bash(browse newtab:*)", "Bash(browse closetab:*)",
 "Bash(browse frame:*)",
 "Bash(browse sessions:*)", "Bash(browse session-close:*)",
-"Bash(browse state:*)", "Bash(browse auth:*)", "Bash(browse har:*)",
+"Bash(browse state:*)", "Bash(browse auth:*)", "Bash(browse har:*)", "Bash(browse video:*)",
 "Bash(browse route:*)", "Bash(browse offline:*)",
 "Bash(browse status:*)", "Bash(browse stop:*)", "Bash(browse restart:*)",
 "Bash(browse cookie:*)", "Bash(browse header:*)",
@@ -196,6 +196,12 @@ browse auth login github
 browse har start
 browse goto https://example.com
 browse har stop ./recording.har
+
+# Video recording
+browse video start ./videos
+browse goto https://example.com
+browse click @e3
+browse video stop
 
 # Device emulation
 browse emulate iphone
@@ -394,6 +400,13 @@ browse har start               Start recording network traffic
 browse har stop [path]         Stop and save HAR file
 ```
 
+### Video recording
+```
+browse video start [dir]       Start recording video (WebM, compositor-level)
+browse video stop              Stop recording and save video files
+browse video status            Check if recording is active
+```
+
 ### Server management
 ```
 browse status                  Server health, uptime, session count
@@ -454,6 +467,7 @@ browse inspect                 Open DevTools (requires BROWSE_DEBUG_PORT)
 | Save/restore session | `state save mysite` / `state load mysite` |
 | Auto-login | `auth save gh https://github.com/login user pass` → `auth login gh` |
 | Record network | `har start` → browse around → `har stop ./out.har` |
+| Record video | `video start ./vids` → browse around → `video stop` |
 | Parallel agents | `--session agent-a <cmd>` / `--session agent-b <cmd>` |
 | Multi-step flow | `echo '[...]' \| browse chain` |
 | Secure browsing | `--allowed-domains example.com goto https://example.com` |
