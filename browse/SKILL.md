@@ -1,6 +1,6 @@
 ---
 name: browse
-version: 2.0.0
+version: 2.1.0
 description: |
   Fast web browsing for Claude Code via persistent headless Chromium daemon. Navigate to any URL,
   read page content, click elements, fill forms, run JavaScript, take screenshots,
