@@ -1,12 +1,12 @@
 ---
 name: browse
-version: 2.1.0
+version: 2.2.0
 description: |
-  Fast web browsing for Claude Code via persistent headless Chromium daemon. Navigate to any URL,
+  Fast web browsing for AI coding agents via persistent headless Chromium daemon. Navigate to any URL,
   read page content, click elements, fill forms, run JavaScript, take screenshots,
   inspect CSS/DOM, capture console/network logs, and more. ~100ms per command after
-  first call. Use when you need to check a website, verify a deployment, read docs,
-  or interact with any web page. No MCP, no Chrome extension — just fast CLI.
+  first call. Works with Claude Code, Cursor, Cline, Windsurf, and any agent that can run Bash.
+  No MCP, no Chrome extension — just fast CLI.
 allowed-tools:
   - Bash
   - Read
