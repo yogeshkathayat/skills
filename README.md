@@ -39,6 +39,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [run-parallel-agents-feature-build](#run-parallel-agents-feature-build) | Orchestrate parallel agents for feature building |
 | [run-parallel-agents-feature-debug](#run-parallel-agents-feature-debug) | Orchestrate parallel agents for debugging |
 | [update-claude-settings](#update-claude-settings) | Detect tech stack, generate Claude Code permissions |
+| [ast-grep](#ast-grep) | Structural code search via AST patterns |
 
 ---
 
@@ -335,3 +336,15 @@ npx skills add https://github.com/ulpi-io/skills --skill update-claude-settings
 **Detect tech stack, generate Claude Code permissions.**
 
 Analyzes the repository to detect languages, package managers, frameworks, services, and monorepo structure. Generates `.claude/settings.local.json` with correct permissions for the detected stack — including @ulpi tools (browse, codemap) when installed. Only includes commands for tools actually detected. Suggests MCP servers for detected services.
+
+---
+
+## ast-grep
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill ast-grep
+```
+
+**Structural code search via AST patterns.**
+
+Find code by structure, not text. Search for async functions without error handling, specific API call patterns, missing guards, or any structural pattern that grep can't express. Guides the agent through writing, testing, and validating ast-grep rules with `stopBy: end` discipline, `--debug-query` for AST inspection, and proper shell escaping. Requires `ast-grep` CLI.
