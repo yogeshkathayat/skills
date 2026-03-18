@@ -25,6 +25,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [pr-retro](#pr-retro) | Branch retrospective with merge readiness verdict |
 | [branch-review-before-pr](#branch-review-before-pr) | Structural review — race conditions, trust boundaries |
 | [find-bugs](#find-bugs) | Security audit + bug finding on branch diff |
+| [bugfix](#bugfix) | Fix bugs with red-green workflow — reproducer, root cause, minimal fix, regression tests |
 | [code-simplify](#code-simplify) | Review code for reuse, quality, efficiency |
 | [frontend-design-ui-ux](#frontend-design-ui-ux) | UI/UX design specs and component briefs |
 | [update-claude-learnings](#update-claude-learnings) | Extract behavioral learnings to CLAUDE.md |
@@ -170,6 +171,18 @@ npx skills add https://github.com/ulpi-io/skills --skill find-bugs
 **Security audit + bug finding on branch diff.**
 
 Analyzes full diff against main, maps attack surfaces, runs security checklist against every changed file, verifies findings against context. Prioritized output.
+
+---
+
+## bugfix
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill bugfix
+```
+
+**Fix bugs with surgical precision — red-green workflow enforced.**
+
+Parses findings from `/find-bugs` or user reports, writes a failing test that reproduces the bug before any fix code, traces root cause through data-flow analysis, implements the minimal fix, and verifies no regressions. Includes bug-type-specific playbooks (security, logic, async, null safety, race conditions) and framework-specific references for 18 frameworks: Express, React, Next.js, Fastify, Hono, Remix, Laravel, Go, Gin, Echo, Fiber, Swift, Bun, Rust, Axum, Actix Web, Rocket, React Native.
 
 ---
 
