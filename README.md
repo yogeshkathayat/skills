@@ -42,6 +42,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [update-claude-settings](#update-claude-settings) | Detect tech stack, generate Claude Code permissions |
 | [ast-grep](#ast-grep) | Structural code search via AST patterns |
 | [codex-review](#codex-review) | Independent AI review via OpenAI Codex CLI — second opinion on your changes |
+| [kiro-review](#kiro-review) | Independent AI review via Kiro CLI — second opinion on your changes |
 | [find-agents](#find-agents) | Find, install, and manage AI agents across 43+ IDEs |
 | [secrets](#secrets) | Credential management — encrypted vault, CLI injection, MCP shim |
 
@@ -418,3 +419,17 @@ npx skills add https://github.com/ulpi-io/skills --skill codex-review
 Get a second opinion on code changes. Analyzes the diff, builds focused review instructions, runs `codex review` with sandbox permissions, parses prioritized findings, and supports iterative multi-round reviews. Use for cross-review before merging or when you want a rival AI to verify Claude's work.
 
 Requires: `codex` CLI + OpenAI API key
+
+---
+
+## kiro-review
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill kiro-review
+```
+
+**Independent AI review via Kiro CLI.**
+
+Get a second opinion on code changes using Amazon's Kiro. Analyzes the diff, builds focused review prompts, runs `kiro-cli chat` in non-interactive mode with full tool access, parses prioritized findings, and supports iterative multi-round reviews. Use for cross-review before merging or when you want a rival AI to verify Claude's work.
+
+Requires: `kiro-cli` + logged in (`kiro-cli login`)
