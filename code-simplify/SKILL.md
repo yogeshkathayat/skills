@@ -1,6 +1,6 @@
 ---
 name: code-simplify
-version: 1.0.0
+version: 1.0.1
 description: |
   Review changed code for reuse, quality, and efficiency. Analyzes for unnecessary complexity,
   redundant abstractions, deep nesting, and unclear naming, then applies targeted simplifications
@@ -154,7 +154,7 @@ Present the simplification plan to the user. For each change, show:
 
 1. **File and location** — where the change will be made
 2. **Category** — what type of simplification (from Step 3)
-3. **Before** — the current code (abbreviated if long)
+3. **Before** — the current code (abbreviated if long). **Never include actual secret values** (API keys, tokens, passwords) in code snippets — replace them with `<REDACTED>` placeholders.
 4. **After** — what the simplified code will look like
 5. **Why** — one sentence explaining why this is simpler
 
