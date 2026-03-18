@@ -1,6 +1,6 @@
 ---
 name: cost-estimate
-version: 1.0.0
+version: 1.0.1
 description: Estimate development cost of a codebase (full repo, branch diff, or single commit). Invoke via /cost-estimate or when user says "estimate cost", "how much would this cost", "development cost". Accepts optional scope args like "branch:feat/foo" or "commit:abc1234".
 ---
 
@@ -211,19 +211,24 @@ The calculator handles: base hours, overhead multipliers, sanity check, calendar
 
 **Every source line must be assigned to exactly one category. Do not double-count.**
 
-## Step 3: Research Market Rates
+## Step 3: Market Rates
 
-Start with the **Hourly Market Rates by Role** from the Configuration section as baseline defaults. Then use WebSearch to validate or adjust for:
-- The specific tech stack detected in Step 1
-- Geographic variations (US markets: SF Bay Area, NYC, Austin, Remote)
-- Contractor vs. employee rates
+Start with the **Hourly Market Rates by Role** from the Configuration section as baseline defaults.
 
-Search queries to use:
+Ask the user: **"Use built-in market rates, or search the web for current rates for your tech stack/region?"**
+
+- **Built-in rates** — use the Configuration section defaults as-is (faster, no web dependency)
+- **Web research** — use WebSearch to validate or adjust for:
+  - The specific tech stack detected in Step 1
+  - Geographic variations (US markets: SF Bay Area, NYC, Austin, Remote)
+  - Contractor vs. employee rates
+
+If the user chooses web research, search for:
 - "senior full stack developer hourly rate 2025"
 - "senior software engineer hourly rate United States 2025"
 - "[detected language/platform] developer contractor rate 2025"
 
-If web search results differ significantly from the config defaults, note the discrepancy and use the researched rates. Otherwise, use the config defaults to avoid slowing down the estimate.
+If web search results differ significantly from the config defaults, note the discrepancy and use the researched rates. Otherwise, use the config defaults.
 
 ## Step 4: Calculate Organizational Overhead
 
