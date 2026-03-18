@@ -40,6 +40,8 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [run-parallel-agents-feature-debug](#run-parallel-agents-feature-debug) | Orchestrate parallel agents for debugging |
 | [update-claude-settings](#update-claude-settings) | Detect tech stack, generate Claude Code permissions |
 | [ast-grep](#ast-grep) | Structural code search via AST patterns |
+| [find-agents](#find-agents) | Find, install, and manage AI agents across 43+ IDEs |
+| [secrets](#secrets) | Credential management — encrypted vault, CLI injection, MCP shim |
 
 ---
 
@@ -348,3 +350,43 @@ npx skills add https://github.com/ulpi-io/skills --skill ast-grep
 **Structural code search via AST patterns.**
 
 Find code by structure, not text. Search for async functions without error handling, specific API call patterns, missing guards, or any structural pattern that grep can't express. Guides the agent through writing, testing, and validating ast-grep rules with `stopBy: end` discipline, `--debug-query` for AST inspection, and proper shell escaping. Requires `ast-grep` CLI.
+
+---
+
+## find-agents
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill find-agents
+```
+
+**Find, install, and manage AI agents across 43+ coding IDEs.**
+
+Full CLI wrapper for [agentshq](https://agentshq.sh) — the package manager for AI coding agents. Search the registry, install agents from GitHub repos or URLs, list/remove/update installed agents. Agents are automatically translated to each IDE's native format on install.
+
+```bash
+npx agentshq find <query>                    # → search for agents by keyword
+npx agentshq add <owner>/<repo>              # → install agents from a GitHub repo
+npx agentshq list                            # → list installed agents
+npx agentshq update                          # → update all agents to latest
+```
+
+---
+
+## secrets
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill secrets
+```
+
+**Credential management for AI coding agents.**
+
+Encrypted local vault that stores API keys, tokens, and credentials. Injects them transparently into CLI tools and MCP servers. Auto-detects agents and writes hooks + MCP entries.
+
+```bash
+secrets add github --token ghp_your_token    # → store credentials
+secrets enable github                        # → enable MCP server in .mcp.json
+secrets init                                 # → auto-detect agents, write hooks
+secrets status                               # → overview of vault, hooks, agents
+```
+
+Built-in services: github, anthropic, openai, aws, slack, jira, google-cloud, vercel, stripe, linear
