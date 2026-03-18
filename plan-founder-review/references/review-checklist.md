@@ -2,7 +2,7 @@
 
 ## Instructions
 
-Review the plan file from `plans/<name>.md` against the checks listed below. Be specific — cite plan section + codebase evidence for each finding. Skip anything that's fine. Only flag real problems.
+Review the plan file from `.ulpi/plans/<name>.md` against the checks listed below. Be specific — cite plan section + codebase evidence for each finding. Skip anything that's fine. Only flag real problems.
 
 **Review mode determines which sections to run:**
 - **QUICK mode:** Sections 1-3 only

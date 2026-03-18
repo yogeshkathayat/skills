@@ -2,7 +2,7 @@
 name: plan-founder-review
 version: 1.0.0
 description: |
-  Technical founder review of a plan before execution. Reads a plan from plans/<name>.md,
+  Technical founder review of a plan before execution. Reads a plan from .ulpi/plans/<name>.md,
   verifies file paths exist, challenges scope and architecture decisions, audits risk coverage
   and test gaps, scores sections, and delivers a verdict (APPROVE/REVISE/REJECT).
   Invoke via /plan-founder-review or when user says "review my plan", "check the plan".
@@ -11,7 +11,7 @@ description: |
 <EXTREMELY-IMPORTANT>
 Before delivering ANY verdict on a plan, you **ABSOLUTELY MUST**:
 
-1. Read the full plan file from `plans/<name>.md`
+1. Read the full plan file from `.ulpi/plans/<name>.md`
 2. Verify that file paths referenced in the plan actually exist (Glob/Read)
 3. Search for existing code the plan proposes to build from scratch
 4. Check that the architecture diagram matches the task descriptions
@@ -28,7 +28,7 @@ This is not optional. Every plan gets real scrutiny.
 
 Before delivering ANY findings, you **MUST** complete this checklist:
 
-1. [ ] Read the full plan file from `plans/<name>.md`
+1. [ ] Read the full plan file from `.ulpi/plans/<name>.md`
 2. [ ] Count tasks and identify the plan's mode (EXPANSION/HOLD/REDUCTION)
 3. [ ] Select review mode (FULL or QUICK — see Mode Selection below)
 4. [ ] Run codebase reality check on every file path in the plan
@@ -113,8 +113,8 @@ The review adapts to plan complexity. Mode is auto-selected but can be overridde
 **Gate: Plan loaded and mode selected before proceeding to Step 1.**
 
 1. Locate the plan file:
-   - If $ARGUMENTS contains a name: read `plans/<name>.md`
-   - If no argument: list `plans/` directory and pick the most recently modified `.md` file
+   - If $ARGUMENTS contains a name: read `.ulpi/plans/<name>.md`
+   - If no argument: list `.ulpi/plans/` directory and pick the most recently modified `.md` file
    - If no plans directory or no files: STOP — "No plan found. Generate one with `/plan-to-task-list-with-dag` first."
 2. Read the full plan file
 3. Extract: title, mode (EXPANSION/HOLD/REDUCTION), task count, task IDs, file paths, dependency JSON
@@ -289,7 +289,7 @@ For each section reviewed, assign a status:
 ```
 ## Founder Review: <Plan Title>
 
-Plan: plans/<name>.md | Mode: FULL/QUICK | Tasks: N
+Plan: .ulpi/plans/<name>.md | Mode: FULL/QUICK | Tasks: N
 
 ### Verdict: APPROVE / REVISE / REJECT
 
@@ -427,7 +427,7 @@ These are excuses. Don't fall for them:
 
 ```
 STEP 0: LOAD PLAN
-├── Read plans/<name>.md
+├── Read .ulpi/plans/<name>.md
 ├── Extract: title, mode, tasks, file paths
 ├── Auto-select review mode (FULL/QUICK)
 └── Gate: Plan loaded, mode selected

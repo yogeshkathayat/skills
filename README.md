@@ -299,7 +299,7 @@ npx skills add https://github.com/ulpi-io/skills --skill plan-founder-review
 
 **Technical founder review of a plan before execution.**
 
-Reads a plan from `plans/<name>.md`, verifies file paths exist, challenges scope and architecture decisions, audits risk coverage and test gaps, scores sections, and delivers a verdict — APPROVE / REVISE / REJECT. Quality gate between planning and execution.
+Reads a plan from `.ulpi/plans/<name>.md`, verifies file paths exist, challenges scope and architecture decisions, audits risk coverage and test gaps, scores sections, and delivers a verdict — APPROVE / REVISE / REJECT. Quality gate between planning and execution.
 
 ---
 

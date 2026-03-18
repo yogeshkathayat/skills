@@ -104,12 +104,12 @@ Interactive build planner — explores codebases, challenges scope with the user
 - **Assign an `**Agent:**` field to every task** — specifies which subagent type executes it (see Agent Table below)
 - Include `## Task Dependencies` JSON block at end of plan (machine-parsed for DAG scheduling)
 - Validate all task IDs appear as keys in the dependency JSON
-- Save plan markdown to `plans/<plan-name>.md` (no `[PLAN]`/`[/PLAN]` markers on disk)
-- **Save structured JSON to `plans/<plan-name>.json`** (machine-parseable, see JSON Output Format below)
+- Save plan markdown to `.ulpi/plans/<plan-name>.md` (no `[PLAN]`/`[/PLAN]` markers on disk)
+- **Save structured JSON to `.ulpi/plans/<plan-name>.json`** (machine-parseable, see JSON Output Format below)
 - Use **P0-P3** priorities
 - Use **TASK-NNN** IDs with 3+ digits (regex: `/\b(TASK-\d{3,})\b/`)
 - Always specify priority explicitly (defaults to P2 when missing)
-- Create `plans/` directory if it doesn't exist
+- Create `.ulpi/plans/` directory if it doesn't exist
 
 ### Never
 
@@ -304,8 +304,8 @@ Pick the agent whose domain best matches the task's technology. If a task spans 
 ├── Include: title, overview, architecture diagram, reuse audit, tasks, failure modes, test coverage map, dependencies JSON
 ├── Generate ASCII architecture diagram showing component relationships and where each task fits
 ├── Generate test coverage map: new codepath → covering TASK → test type
-├── Save markdown to plans/<plan-name>.md
-├── Save structured JSON to plans/<plan-name>.json (see JSON Output Format)
+├── Save markdown to .ulpi/plans/<plan-name>.md
+├── Save structured JSON to .ulpi/plans/<plan-name>.json (see JSON Output Format)
 ├── Print summary table (ID, title, priority, deps, parallel group)
 └── Gate: Both files saved, markdown valid, JSON valid, all new sections present
 ```
@@ -413,7 +413,7 @@ Include specific file paths where the agent should create or modify files.>
 
 ## JSON Output Format
 
-In addition to the markdown plan, **always save a companion JSON file** at `plans/<plan-name>.json`. This is the primary machine-parseable output. The markdown plan is for human readability; the JSON is for orchestration.
+In addition to the markdown plan, **always save a companion JSON file** at `.ulpi/plans/<plan-name>.json`. This is the primary machine-parseable output. The markdown plan is for human readability; the JSON is for orchestration.
 
 **Schema:**
 
@@ -653,7 +653,7 @@ Plan generated.
 
 **Mode:** EXPANSION | HOLD | REDUCTION
 **Tasks:** X total (Y parallel groups)
-**Files:** plans/<plan-name>.md + plans/<plan-name>.json
+**Files:** .ulpi/plans/<plan-name>.md + .ulpi/plans/<plan-name>.json
 
 **Execution Summary:**
 - Layer 0: TASK-001, TASK-004 (P0, no deps)
