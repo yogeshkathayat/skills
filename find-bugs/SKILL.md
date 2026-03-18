@@ -1,6 +1,6 @@
 ---
 name: find-bugs
-version: 1.0.0
+version: 1.0.1
 description: Use when the user asks to find bugs, review changes, security audit, or check code quality on the current branch. Analyzes full diffs against the default branch, maps attack surfaces, runs a security checklist against every changed file, verifies findings against context, and reports prioritized issues. Invoke via /find-bugs or when user says "find bugs", "review my changes", "security review", "audit this code".
 ---
 
@@ -255,7 +255,7 @@ For each finding:
 - **Severity:** Critical / High / Medium / Low
 - **Category:** Security (injection, XSS, auth, etc.) / Logic Bug / Code Quality
 - **Problem:** What is wrong — specific and concrete
-- **Evidence:** Why this is real (not already handled, no existing test, framework doesn't auto-protect)
+- **Evidence:** Why this is real (not already handled, no existing test, framework doesn't auto-protect). **NEVER include actual secret values** (API keys, tokens, passwords) in evidence — describe the type and location only (e.g., "hardcoded API key at auth.ts:42" not the key itself).
 - **Attack vector** (security issues only): How could this be exploited?
 - **Fix:** Concrete suggestion with code snippet if helpful
 - **References:** OWASP, CWE, RFC, or other standards (if applicable)
@@ -301,6 +301,7 @@ For each finding:
 | Never skip files in the diff | Every changed file must be reviewed |
 | Never skip checklist items | Every security check applies to every file |
 | Never report unverified findings | False positives waste time and erode trust |
+| Never include actual secret values in findings | Report the type and location of the secret, never the value itself |
 | Never report style issues as bugs | Formatting is not a bug |
 | Never invent issues | A clean review is a valid and honest outcome |
 | Always read full diff content | File names alone miss bugs |
