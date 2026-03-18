@@ -185,7 +185,7 @@ Use the Agent tool with these parameters for each task:
 - Use `run_in_background: true` — without this, agents run sequentially
 - Each agent gets its complete brief in the `prompt` parameter
 - No placeholder values — all parameters must be complete
-- For web browsing tasks, use `browse --session <agent-name>` for session isolation
+- For verifying built features in the browser (e.g., testing a UI component the agent just created), use `browse --session <agent-name>` for session isolation
 
 ### Step 5: Monitor and Aggregate Results
 
@@ -523,7 +523,7 @@ The `run-parallel-agents-feature-build` skill integrates with:
 - **`start`** — Use `start` to identify if parallel agents are appropriate
 - **`run-parallel-agents-feature-debug`** — For debugging, use the debug variant instead
 - **`codemap`** — Use `codemap search` and `codemap deps` when preparing briefs to understand what code exists and what each file depends on
-- **`browse`** — For parallel web testing, use `browse --session <agent-name>` to isolate each agent's browser state
+- **`browse`** — For agents to verify their own work in the browser (e.g., testing a page they just built), use `browse --session <agent-name>` to isolate each agent's browser state
 
 **Workflow:** `start` → `plan-to-task-list-with-dag` → `plan-founder-review` → `run-parallel-agents-feature-build`
 
