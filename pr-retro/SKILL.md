@@ -1,6 +1,6 @@
 ---
 name: pr-retro
-version: 1.0.0
+version: 1.0.1
 description: Use when the user asks for a branch retrospective, pre-PR analysis, branch health check, or says "/pr-retro". Analyzes all commits on the current branch vs base (main..HEAD), computes size metrics, test LOC ratio, focus score, session analysis, commit hygiene, contributor breakdown, self-review scan (TODOs, debug artifacts, .only, secrets), and delivers a merge readiness verdict (GREEN/YELLOW/RED). Supports --quick (dashboard only) and --base <branch> (custom base). Saves JSON snapshot to .history/pr-retros/.
 allowed-tools:
   - Bash
@@ -293,7 +293,7 @@ Then scan for these patterns:
 Report each finding with:
 - Severity level (BLOCK / WARN / INFO)
 - File path and line number (if available)
-- The matching content snippet
+- The matching pattern name (e.g., "hardcoded secret", "console.log", "TODO"). **NEVER include actual secret values** — report the type and location only (e.g., "hardcoded API key at config.ts:17", not the key itself).
 - Brief description
 
 ## Step 8: Focus Score + Session Analysis + Time Distribution
@@ -542,7 +542,7 @@ JSON schema:
     "warnings": 2,
     "info": 1,
     "findings": [
-      { "severity": "WARN", "file": "src/auth/login.ts", "line": 42, "pattern": "console.log", "content": "console.log(\"debug auth\")" }
+      { "severity": "WARN", "file": "src/auth/login.ts", "line": 42, "pattern": "console.log", "description": "debug logging left in auth flow" }
     ]
   },
   "sessions": {
