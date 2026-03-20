@@ -1,6 +1,6 @@
 ---
 name: browse
-version: 2.4.0
+version: 2.5.0
 description: |
   Fast web browsing and web app testing for AI coding agents via persistent headless Chromium daemon.
   Browse any URL, read page content, click elements, fill forms, run JavaScript, take screenshots,
@@ -226,6 +226,10 @@ browse screenshot-diff baseline.png current.png
 # Headed mode (visible browser)
 browse --headed goto https://example.com
 
+# Stealth mode (bypasses bot detection)
+# Requires: bun add rebrowser-playwright && npx rebrowser-playwright install chromium
+browse --runtime rebrowser goto https://example.com
+
 # State list / show
 browse state list
 browse state show mysite
@@ -277,6 +281,7 @@ Refs are invalidated on navigation — run `snapshot` again after `goto`.
 ### Interaction
 ```
 browse click <selector>        Click element (CSS selector or @ref)
+browse click <x>,<y>           Click at page coordinates (e.g. 590,461)
 browse dblclick <selector>     Double-click element
 browse fill <selector> <value> Fill input field
 browse select <selector> <val> Select dropdown value
@@ -426,6 +431,7 @@ browse inspect                 Open DevTools (requires BROWSE_DEBUG_PORT)
 | `--content-boundaries` | Wrap page content in nonce-delimited markers (prompt injection defense) |
 | `--allowed-domains <d,d>` | Block navigation/resources outside allowlist |
 | `--headed` | Run browser in headed (visible) mode |
+| `--runtime <name>` | Browser engine: playwright (default), rebrowser (stealth) |
 
 ## Speed Rules
 
@@ -479,6 +485,7 @@ browse inspect                 Open DevTools (requires BROWSE_DEBUG_PORT)
 | Visual regression | `screenshot-diff baseline.png` |
 | Debug with DevTools | `inspect` (set BROWSE_DEBUG_PORT first) |
 | See the browser | `browse --headed goto <url>` |
+| Bypass bot detection | `--runtime rebrowser goto <url>` |
 
 ## Architecture
 
@@ -497,3 +504,4 @@ browse inspect                 Open DevTools (requires BROWSE_DEBUG_PORT)
 - AI-friendly error messages: Playwright errors rewritten to actionable hints
 - CDP remote connection: `BROWSE_CDP_URL` to connect to existing Chrome
 - Policy enforcement: `browse-policy.json` for allow/deny/confirm rules
+- Two browser engines: playwright (default) and rebrowser (stealth, bypasses bot detection)
