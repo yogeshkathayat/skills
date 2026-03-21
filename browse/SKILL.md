@@ -1,6 +1,6 @@
 ---
 name: browse
-version: 2.10.0
+version: 2.11.0
 description: |
   Fast web browsing and web app testing for AI coding agents via persistent headless Chromium daemon.
   Browse any URL, read page content, click elements, fill forms, run JavaScript, take screenshots,
@@ -198,6 +198,12 @@ browse state save mysite
 browse state load mysite
 browse state clean                    # delete states older than 7 days
 browse state clean --older-than 30    # custom threshold
+
+# Persistent profiles (full browser state, own Chromium)
+browse --profile mysite goto https://app.com       # all state persists automatically
+browse --profile mysite snapshot -i                 # still logged in next time
+browse profile list                                 # list all profiles with size
+browse profile delete old-site                      # remove a profile
 
 # Cookie management
 browse cookie clear                                      # clear all cookies
@@ -474,6 +480,14 @@ browse state clean             Delete states older than 7 days
 browse state clean --older-than N   Custom age threshold (days)
 ```
 
+### Profiles
+```
+browse --profile <name> <cmd>             Use persistent browser profile
+browse profile list                       List profiles with disk size
+browse profile delete <name>              Delete a profile
+browse profile clean [--older-than <d>]   Remove old profiles (default: 7 days)
+```
+
 ### Cookie import (macOS — borrow auth from real browsers)
 ```
 browse cookie-import --list                         List installed browsers
@@ -527,13 +541,16 @@ browse upgrade                 Self-update via npm
 
 | Flag | Description |
 |------|-------------|
+| `--profile <name>` | Persistent browser profile (own Chromium, full state) |
 | `--session <id>` | Named session (isolates tabs, refs, cookies — auto-persists on close) |
 | `--state <path>` | Load state file (cookies/storage) before first command |
 | `--json` | Wrap output as `{success, data, command}` |
 | `--content-boundaries` | Wrap page content in nonce-delimited markers (prompt injection defense) |
 | `--allowed-domains <d,d>` | Block navigation/resources outside allowlist |
 | `--headed` | Run browser in headed (visible) mode |
-| `--runtime <name>` | Browser engine: playwright (default), rebrowser (stealth) |
+| `--cdp <port>` | Connect to Chrome on a specific debugging port |
+| `--connect` | Auto-discover and connect to a running Chrome instance |
+| `--runtime <name>` | Browser engine: playwright (default), rebrowser (stealth), lightpanda |
 | `--max-output <n>` | Truncate output to N characters |
 
 ## Speed Rules
@@ -590,6 +607,7 @@ browse upgrade                 Self-update via npm
 | Debug with DevTools | `inspect` (set BROWSE_DEBUG_PORT first) |
 | See the browser | `browse --headed goto <url>` |
 | Bypass bot detection | `--runtime rebrowser goto <url>` |
+| Persistent login state | `--profile mysite` → browse around → close → reopen (still logged in) |
 | Get element position | `box @e3` |
 | Check page errors | `errors` |
 | Right-click context menu | `rightclick @e3` |
