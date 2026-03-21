@@ -35,7 +35,6 @@ If not installed, tell the user:
 > npm install -g @ulpi/browse
 > ```
 >
-> If you don't have bun, install it first from https://bun.sh then run the command above.
 
 **Do NOT install anything automatically.** Wait for the user to confirm they have installed it before proceeding.
 
@@ -284,7 +283,7 @@ browse screenshot-diff baseline.png current.png
 browse --headed goto https://example.com
 
 # Stealth mode (bypasses bot detection)
-# Requires: bun add rebrowser-playwright && npx rebrowser-playwright install chromium
+# Requires: npm install rebrowser-playwright && npx rebrowser-playwright install chromium
 browse --runtime rebrowser goto https://example.com
 
 # State list / show
