@@ -16,7 +16,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 
 | Skill | What it does |
 |-------|-------------|
-| [browse](#browse) | Headless browser CLI — 48 commands, ref-based interaction, 13x fewer tokens than @playwright/mcp |
+| [browse](#browse) | Headless browser CLI — 76+ commands, ref-based interaction, 13x fewer tokens than @playwright/mcp |
 | [codemap](#codemap) | Code search + architecture analysis — hybrid vector/BM25, dependency graphs, PageRank |
 | [plan-to-task-list-with-dag](#plan-to-task-list-with-dag) | Decompose features into parallel-ready task DAGs |
 | [map-project](#map-project) | Generate CLAUDE.md from codebase scan |
@@ -46,6 +46,9 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [kiro-review](#kiro-review) | Independent AI review via Kiro CLI — second opinion on your changes |
 | [find-agents](#find-agents) | Find, install, and manage AI agents across 43+ IDEs |
 | [secrets](#secrets) | Credential management — encrypted vault, CLI injection, MCP shim |
+| [build-dmg](#build-dmg) | Build distributable DMG installers for macOS Xcode projects |
+| [lokei](#lokei) | Local dev proxy — named HTTPS domains on .test with valid TLS |
+| [nextjs](#nextjs) | Next.js 16 App Router reference — Cache Components, i18n, data layer, atomic components |
 
 ---
 
@@ -66,9 +69,9 @@ browse fill @e3 "strollers"                # → "Filled @e3"  (15 tokens)
 browse click @e5                           # → "Clicked @e5"  (15 tokens)
 ```
 
-**Why not @playwright/mcp?** Playwright MCP dumps ~16K tokens on every action. `browse` returns a one-liner. Over a 10-step session: **12K tokens vs 146K** — 13x less context burned. 48 commands, ref-based interaction, cursor-interactive detection, 150+ device emulation, multi-agent sessions.
+**Why not @playwright/mcp?** Playwright MCP dumps ~16K tokens on every action. `browse` returns a one-liner. Over a 10-step session: **12K tokens vs 146K** — 13x less context burned. 76+ commands, ref-based interaction, cursor-interactive detection, 150+ device emulation, multi-agent sessions, persistent profiles, React DevTools, command recording, cookie import from real browsers.
 
-Requires: `bun install -g @ulpi/browse` | [Full docs →](https://github.com/ulpi-io/browse)
+Requires: `npm install -g @ulpi/browse` | [Full docs →](https://github.com/ulpi-io/browse)
 
 ---
 
@@ -446,3 +449,50 @@ npx skills add https://github.com/ulpi-io/skills --skill kiro-review
 Get a second opinion on code changes using Amazon's Kiro. Analyzes the diff, builds focused review prompts, runs `kiro-cli chat` in non-interactive mode with full tool access, parses prioritized findings, and supports iterative multi-round reviews. Use for cross-review before merging or when you want a rival AI to verify Claude's work.
 
 Requires: `kiro-cli` + logged in (`kiro-cli login`)
+
+---
+
+## build-dmg
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill build-dmg
+```
+
+**Build distributable DMG installers for macOS Xcode projects.**
+
+Auto-detects app name, scheme, project/workspace, and team ID from project files. Handles archiving, code signing, DMG creation with styled Finder window, and version management. Supports xcodegen projects and optional ExportOptions.plist configuration.
+
+Requires: Xcode command-line tools
+
+---
+
+## lokei
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill lokei
+```
+
+**Local dev proxy — named HTTPS domains on .test with valid TLS.**
+
+Auto-detects 30+ frameworks (Next.js, Vite, Rails, Django, etc.) and injects correct port/host flags. Creates local HTTPS domains (e.g., `https://myapp.test`) with valid TLS certificates signed by a local CA. Supports public tunnel sharing, Docker Compose integration, traffic inspection, and multi-service orchestration via `.test.yaml`.
+
+```bash
+lokei run                                    # → auto-detect framework, assign https://project.test
+lokei run npm run dev                        # → explicit command
+lokei share                                  # → public tunnel URL
+lokei doctor                                 # → verify setup
+```
+
+Requires: `npm i -g lokei && lokei setup`
+
+---
+
+## nextjs
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill nextjs
+```
+
+**Next.js 16 App Router reference for AI coding agents.**
+
+Comprehensive framework skill covering Cache Components, proxy.ts API-backed data layer, multilingual-first with next-intl, atomic components, structured logging, and analytics tracking. Enforces strict conventions: all strings via `t()`, components max 150 lines, pages max 300 lines. Includes 19 reference files for stack overview, folder structure, components, pages, data fetching, forms, caching, i18n, error handling, logging, analytics, testing, auth, security, SEO, and accessibility.
