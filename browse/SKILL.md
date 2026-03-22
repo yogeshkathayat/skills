@@ -1,6 +1,6 @@
 ---
 name: browse
-version: 3.0.0
+version: 3.1.0
 description: |
   Fast web browsing and web app testing for AI coding agents via persistent headless Chromium daemon.
   Browse any URL, read page content, click elements, fill forms, run JavaScript, take screenshots,
@@ -100,25 +100,82 @@ To avoid being prompted on every browse command, tell the user they can add brow
 - Screenshots MUST be saved to `.browse/sessions/default/` (or `.browse/sessions/<session-id>/` when using `--session`). Use descriptive filenames like `browse screenshot .browse/sessions/default/homepage.png`. NEVER save screenshots to `/tmp` or any other location.
 - The browser persists between calls — cookies, tabs, and state carry over.
 - The server auto-starts on first command. No manual setup needed.
+- Use `--session <id>` for parallel agent isolation. Each session gets its own tabs, refs, cookies.
+- Use `--json` for structured output (`{success, data, command}`).
+- Use `--content-boundaries` for prompt injection defense when reading untrusted pages.
+- Use `--allowed-domains domain1,domain2` to restrict navigation to trusted sites.
 - If you hit CAPTCHA/MFA after 2-3 failures, read [references/guides.md](references/guides.md) for the mandatory handoff protocol.
 
 ## Quick Reference
 
 ```bash
-browse goto https://example.com              # Navigate
-browse wait --network-idle                    # Wait for page load
-browse text                                  # Read page text
-browse screenshot                            # Take screenshot
-browse snapshot -i                           # Get interactive refs
+# Navigate and wait
+browse goto https://example.com
+browse wait --network-idle
+
+# Read content
+browse text                                  # Cleaned page text
+browse links                                 # All links as "text → href"
+browse js "document.title"                   # Run JavaScript
+
+# Screenshot (then Read the image to view it)
+browse screenshot .browse/sessions/default/homepage.png
+
+# Interact via snapshot refs (preferred)
+browse snapshot -i                           # Get interactive element refs
 browse click @e3                             # Click by ref
 browse fill @e4 "test@test.com"              # Fill by ref
-browse js "document.title"                   # Run JavaScript
-browse links                                 # Get all links
-browse scroll down                           # Scroll viewport
-browse find role button                      # Find by ARIA role
-browse cookie-import chrome --domain .site.com  # Import auth from Chrome
-browse --profile mysite goto https://app.com # Persistent browser state
+browse check @e7                             # Check checkbox
+browse select @e5 "option-value"             # Select dropdown
+
+# Interact via CSS selectors (use [id=...] instead of #)
+browse click "button.submit"
+browse fill "[id=email]" "test@test.com"
+browse fill "[id=password]" "abc123"
+browse click "button[type=submit]"
+
+# Wait variants
+browse wait ".loaded"                        # Wait for element
+browse wait --url "**/dashboard"             # Wait for URL
+browse wait --network-idle                   # Wait for network idle
+browse wait 2000                             # Wait milliseconds
+
+# Element queries
+browse count ".search-result"                # Count elements
+browse value "[id=email]"                    # Get input value
+browse css @e3 "color"                       # Get computed CSS
+browse attrs @e3                             # Get attributes
+
+# Scroll
+browse scroll down
+browse scroll "[id=target]"
+
+# iframes
+browse frame "[id=my-iframe]"               # Target iframe
+browse text                                  # Read inside iframe
+browse frame main                            # Back to main page
+
+# Cookie import from real browsers (macOS)
+browse cookie-import chrome --domain .site.com
+
+# Persistent profiles
+browse --profile mysite goto https://app.com
 ```
+
+## Common Patterns
+
+| Task | Commands |
+|------|----------|
+| Read a page | `goto` → `wait --network-idle` → `text` |
+| Interact with elements | `snapshot -i` → `click @ref` / `fill @ref "val"` |
+| Visual check | `screenshot .browse/sessions/default/page.png` → `Read` the image |
+| Fill and submit form | `snapshot -i` → `fill @e4 "val"` → `click @e5` |
+| Check if element exists | `count ".thing"` |
+| Extract specific data | `js "document.querySelector('.price').textContent"` |
+| Interact in iframe | `frame "[id=x]"` → interact → `frame main` |
+| Mock API responses | `route "**/api/*" fulfill 200 '{"data":[]}'` |
+| Mobile layout check | `emulate iphone` → `goto <url>` → `screenshot` |
+| Bypass bot detection | `--runtime rebrowser goto <url>` |
 
 ## Command Categories
 
