@@ -293,11 +293,22 @@ browse emulate reset           Reset to desktop (1920x1080)
 browse offline [on|off]        Toggle offline mode
 ```
 
+## Cookies
+```
+browse cookie <n>=<v>                  Set cookie (shorthand)
+browse cookie set <n> <v> [--domain d --secure]  Set cookie with options
+browse cookie clear                    Clear all cookies
+browse cookie export <file>            Export cookies to JSON file
+browse cookie import <file>            Import cookies from JSON file
+```
+
 ## Network
 ```
 browse route <pattern> block           Block matching requests
 browse route <pattern> fulfill <s> [b] Mock with status + body
 browse route clear                     Remove all routes
+browse header <name>:<value>           Set request header
+browse useragent <string>              Set user agent string
 ```
 
 ## Inspection
@@ -406,7 +417,7 @@ browse cookie-import <browser> --profile <p> --domain <d>   Specific Chrome prof
 
 ## Auth vault
 ```
-browse auth save <name> <url> <user> <pass>   Save credentials (encrypted)
+browse auth save <name> <url> <user> <pass|--password-stdin>   Save credentials (encrypted)
 browse auth login <name>                       Auto-login using saved credentials
 browse auth list                               List saved credentials
 browse auth delete <name>                      Delete credentials
