@@ -1,11 +1,13 @@
 ---
 name: laravel
-version: 1.0.0
+version: 1.1.0
 description: |
   Laravel 12 API development — API-only, Actions pattern, Sanctum/Passport auth,
   Eloquent strict mode, Redis caching/queues, Horizon, Filament admin, Pest testing.
+  Also covers Laravel AI ecosystem: AI SDK (agents, embeddings, image/audio generation),
+  Boost (AI-assisted development), and MCP (exposing your app to AI clients).
   Use when working on any Laravel route, controller, model, action, migration,
-  job, notification, test, or API endpoint task.
+  job, notification, test, API endpoint, AI agent, or MCP server task.
 allowed-tools:
   - Bash
   - Read
@@ -63,6 +65,9 @@ Before writing ANY code, you **MUST** complete this checklist:
 | Notifications, email, SMS | `references/notifications-mail.md` |
 | File uploads, S3, media library | `references/file-storage.md` |
 | Task scheduling, cron jobs | `references/scheduling.md` |
+| AI agents, text/image/audio generation, embeddings, RAG | `references/ai-sdk.md` |
+| AI-assisted development, Boost setup, guidelines, skills | `references/boost.md` |
+| MCP servers, exposing app to AI clients, tools/resources/prompts | `references/mcp.md` |
 
 Multiple tasks? Read multiple files. The references are self-contained — no need to consult external docs.
 
