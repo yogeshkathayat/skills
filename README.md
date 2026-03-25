@@ -50,6 +50,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [lokei](#lokei) | Local dev proxy — named HTTPS domains on .test with valid TLS |
 | [nextjs](#nextjs) | Next.js 16 App Router reference — Cache Components, i18n, data layer, atomic components |
 | [laravel](#laravel) | Laravel 12 API framework — Actions pattern, AI SDK, Boost, MCP, Filament, Horizon, Pest |
+| [laravel-filament](#laravel-filament) | Filament v5 admin panel — resources, schemas, tables, actions, widgets, v3-to-v5 migration |
 
 ---
 
@@ -509,3 +510,15 @@ npx skills add https://github.com/ulpi-io/skills --skill laravel
 **Laravel 12 API framework reference for AI coding agents.**
 
 Comprehensive API-only framework skill enforcing thin controllers, Actions pattern for business logic, Form Requests for validation, API Resources for responses, and Eloquent strict mode. Covers the full Laravel AI ecosystem: AI SDK (agents, embeddings, image/audio generation, vector search, streaming), Boost (AI-assisted development with MCP tools and guidelines), and MCP (exposing your app to external AI clients). Includes 22 reference files for stack overview, folder structure, routing, controllers, validation, Eloquent models, API resources, service layer, auth, database, error handling, logging, caching, queues/jobs, testing, security, API docs, observability, Filament admin, Docker, notifications, file storage, scheduling, AI SDK, Boost, and MCP.
+
+---
+
+## laravel-filament
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill laravel-filament
+```
+
+**Filament v5 admin panel reference for AI coding agents.**
+
+Dedicated skill for building Filament v5 admin panels with correct v5 namespaces, extracted schema/table classes, and unified action imports. Covers the critical v3-to-v5 migration (unified `Filament\Actions` namespace, `->recordActions()` replacing `->actions()`, `Schemas\Components` replacing `Forms\Components` for layout, `BadgeColumn` removal). Includes 12 reference files for namespace mapping, resources, forms, tables, actions, filters, relationships, widgets, panels/navigation, notifications, testing, and infolists.
