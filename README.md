@@ -51,6 +51,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [nextjs](#nextjs) | Next.js 16 App Router reference — Cache Components, i18n, data layer, atomic components |
 | [laravel](#laravel) | Laravel 12 API framework — Actions pattern, AI SDK, Boost, MCP, Filament, Horizon, Pest |
 | [laravel-filament](#laravel-filament) | Filament v5 admin panel — resources, schemas, tables, actions, widgets, v3-to-v5 migration |
+| [rust](#rust) | Rust systems programming — storage engines, SIMD, pgwire, DataFusion, tantivy, HNSW, arenas |
 
 ---
 
@@ -522,3 +523,15 @@ npx skills add https://github.com/ulpi-io/skills --skill laravel-filament
 **Filament v5 admin panel reference for AI coding agents.**
 
 Dedicated skill for building Filament v5 admin panels with correct v5 namespaces, extracted schema/table classes, and unified action imports. Covers the critical v3-to-v5 migration (unified `Filament\Actions` namespace, `->recordActions()` replacing `->actions()`, `Schemas\Components` replacing `Forms\Components` for layout, `BadgeColumn` removal). Includes 12 reference files for namespace mapping, resources, forms, tables, actions, filters, relationships, widgets, panels/navigation, notifications, testing, and infolists.
+
+---
+
+## rust
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill rust
+```
+
+**Rust systems programming reference for AI coding agents.**
+
+Comprehensive skill for building high-performance Rust systems — database storage engines, custom binary formats, wire protocols, query execution, search, and vector indexes. Covers WAL/mmap/MVCC storage with pluggable backends, zero-copy binary formats (BMAP, BARR, packed decimal), DataFusion/Arrow SQL execution with custom table providers and UDFs, pgwire and MySQL wire protocol servers with full ORM compatibility, tantivy full-text search with HNSW vector indexing and SIMD distance functions, arena-allocated graph engines with traversal algorithms, R-tree geospatial with bi-temporal time-travel, tokio async patterns with io_uring and lock-free concurrency, proptest property testing, and unsafe Rust patterns for mmap/SIMD/FFI. Includes 12 reference files covering stack, storage engine, binary formats, type system, DataFusion/Arrow, wire protocols, search/vector, arena/graph, geo/temporal, async/concurrency, testing, and error handling/unsafe.
