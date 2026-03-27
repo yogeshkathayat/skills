@@ -1,15 +1,69 @@
-# Per-App CLAUDE.md Template
+# Per-App / Per-Binary CLAUDE.md Template
 
-Use this template for every `apps/*/CLAUDE.md`. Apps are more complex than packages and need app-type-specific sections.
+Use the appropriate template based on project type. Apps/binaries are more complex than library crates/packages and need type-specific sections.
 
 ---
 
-## Base Template (All Apps)
+## Rust Binary Crate Template
+
+````markdown
+# hgdb
+
+[1-2 sentence purpose. What does this binary do?]
+
+## Commands
+
+| Task | Command |
+|------|---------|
+| Build | `cargo build -p hgdb` |
+| Run | `cargo run -p hgdb -- [args]` |
+| Release build | `cargo build -p hgdb --release` |
+| Test | `cargo test -p hgdb` |
+
+## Entry Point
+
+| File | Purpose |
+|------|---------|
+| `src/main.rs` | Binary entry — parses CLI args, wires crates together, starts server |
+
+## Dependencies
+
+| Crate | Used For |
+|-------|----------|
+| `hgdb-server` | pgwire + HTTP server startup |
+| `hgdb-sql` | DataFusion SessionContext, catalog setup |
+| `hgdb-storage` | Storage engine initialization |
+| ... | ... |
+
+## Startup Flow
+
+```
+1. Parse CLI args / load config (hgdb.toml)
+2. Initialize storage (WAL replay, segment registry)
+3. Build catalog from WAL (schema recovery)
+4. Register TableProviders with DataFusion
+5. Start pgwire listener on :5432
+6. Start HTTP listener on :8080 (if enabled)
+7. Ready to accept connections
+```
+
+## Feature Flags
+
+| Flag | What it enables |
+|------|----------------|
+| `sql` (default) | SQL engine via hgdb-sql |
+| `pgwire` (default) | Postgres wire protocol |
+| `http` | HTTP/REST API |
+````
+
+---
+
+## Node.js API Server App — Template
 
 ````markdown
 # @scope/app-name
 
-[1-2 sentence purpose. What does this app do? Who uses it?]
+[1-2 sentence purpose.]
 
 ## Commands
 
@@ -17,170 +71,45 @@ Use this template for every `apps/*/CLAUDE.md`. Apps are more complex than packa
 |------|---------|
 | Build | `pnpm --filter @scope/app-name build` |
 | Start | `[start command]` |
-| Test | `[test command or "No tests"]` |
+| Test | `[test command]` |
 
-## File Structure
+## Routes
 
-```
-apps/app-name/src/
-├── index.ts          [Entry point purpose]
-├── commands/         [If CLI]
-├── routes/           [If API]
-├── pages/            [If web UI]
-└── ...
-```
-
-## Entry Points
-
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Main entry point — [what it does] |
-| ... | ... |
+| Route | Method | Handler | Purpose |
+|-------|--------|---------|---------|
+| `/api/health` | GET | `system.ts:health` | Health check |
+| ... | ... | ... | ... |
 
 ## Dependencies
 
 | Package | Used For |
 |---------|----------|
 | `@scope/contracts` | Types: `TypeA`, `TypeB` |
-| `@scope/config` | Paths: `functionA` |
 | ... | ... |
-
-## Key Patterns
-
-[App-specific architectural patterns — see sections below]
-
-## Conventions
-
-- [App-specific conventions]
-- [Build tool: tsup or tsc or vite]
 ````
 
 ---
 
-## API Server App — Additional Sections
-
-Add these sections for HTTP server apps:
+## Node.js CLI App — Template
 
 ````markdown
-## Routes
+# @scope/cli-name
 
-| Route | Method | Handler | Purpose |
-|-------|--------|---------|---------|
-| `/api/health` | GET | `system.ts:health` | Health check |
-| `/api/resource` | GET | `resource.ts:list` | List resources |
-| `/api/resource` | POST | `resource.ts:create` | Create resource |
-| ... | ... | ... | ... |
+[1-2 sentence purpose.]
 
-## Request/Response Pattern
-
-```typescript
-// Route handler signature
-interface RouteContext {
-  req: http.IncomingMessage;
-  res: http.ServerResponse;
-  url: URL;
-  projectDir: string;
-  params: Record<string, string>;
-}
-
-// All handlers follow this pattern:
-export async function handlerName(ctx: RouteContext): Promise<void> {
-  // ... process request
-  jsonResponse(ctx.res, data, statusCode, ctx.req);
-}
-```
-
-## Middleware
-
-| Middleware | File | Purpose |
-|-----------|------|---------|
-| CORS | `middleware/cors.ts` | Cross-origin headers |
-| ... | ... | ... |
-
-## Real-Time
-
-| Protocol | Purpose | Endpoint |
-|----------|---------|----------|
-| WebSocket | Live updates | `/ws` |
-| SSE | Review events | `/api/review/hub/events` |
-````
-
----
-
-## CLI App — Additional Sections
-
-Add these sections for CLI apps:
-
-````markdown
 ## Commands
 
 | Command | Purpose | File |
 |---------|---------|------|
 | `init` | Initialize project | `commands/init.ts` |
-| `rules` | Manage rules | `commands/rules.ts` |
 | ... | ... | ... |
 
-## Hook Handlers
+## Dependencies
 
-| Handler | Trigger | Can Block? | File |
-|---------|---------|-----------|------|
-| `session-start` | SessionStart | No | `hooks/session-start.ts` |
-| `pre-tool` | PreToolUse | Yes (exit 2) | `hooks/pre-tool.ts` |
-| ... | ... | ... | ... |
-
-## stdin/stdout Pattern
-
-```typescript
-// Hook handlers read JSON from stdin
-const input: HookInput = JSON.parse(await readStdin());
-
-// Output JSON to stdout (for blocking hooks)
-const output: HookOutput = { hookSpecificOutput: { ... } };
-console.log(JSON.stringify(output));
-
-// Exit codes: 0 = allow, 2 = block
-process.exit(exitCode);
-```
-````
-
----
-
-## Web UI App — Additional Sections
-
-Add these sections for web UI apps:
-
-````markdown
-## Pages
-
-| Page | Route | Purpose |
-|------|-------|---------|
-| Dashboard | `/` | Overview and stats |
-| Settings | `/settings` | User preferences |
-| ... | ... | ... |
-
-## Key Components
-
-| Component | Purpose |
-|-----------|---------|
-| Sidebar | Navigation + project selector |
-| UpdateBanner | Version update notification |
+| Package | Used For |
+|---------|----------|
+| `@scope/contracts` | Types |
 | ... | ... |
-
-## API Integration
-
-```typescript
-// All API calls go through the client
-import { GuardianClient, createClient } from "@scope/api-client";
-
-const client = createClient({ baseUrl: "http://localhost:9800" });
-const rules = await client.getRules();
-```
-
-## Design System
-
-- [Color scheme, theme approach]
-- [Component library if any]
-- [Build output: single HTML file via vite-plugin-singlefile]
 ````
 
 ---
@@ -189,15 +118,15 @@ const rules = await client.getRules();
 
 | App Type | Target Lines | Notes |
 |----------|-------------|-------|
-| API server | 150-250 | Route table is the largest section |
+| Rust binary | 50-100 | Startup flow is the key section |
+| API server | 150-250 | Route table is largest |
 | CLI tool | 120-200 | Command + hook tables |
-| Web UI | 120-200 | Pages + components tables |
+| Web UI | 120-200 | Pages + components |
 
 ## Rules
 
-1. **Route/command/page tables must be COMPLETE** — every route, every command, every page
-2. **Dependencies must show what's used from each package** — not just the package name
-3. **Entry points must explain the startup flow** — what happens when the app starts
-4. **Patterns must show real code** — from the actual codebase, not generic examples
-5. **No prose paragraphs** — tables and bullet lists ONLY
-6. **No duplication with root** — don't repeat global conventions
+1. **Entry points must explain the startup flow** — what happens when the binary/app starts
+2. **Dependencies must show what's used** — not just crate/package names
+3. **Feature flags / commands must be COMPLETE**
+4. **No prose paragraphs** — tables and bullet lists ONLY
+5. **No duplication with root** — don't repeat global conventions

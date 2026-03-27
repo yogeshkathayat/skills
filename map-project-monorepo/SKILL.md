@@ -1,128 +1,216 @@
 ---
 name: map-project-monorepo
-version: 1.0.0
-description: Scan a monorepo and generate/update per-package CLAUDE.md files. Each subdirectory gets a focused, self-contained CLAUDE.md with exports, key files, dependencies, and conventions. Run after each coding session, major refactors, or package additions to keep the AI context map current.
+version: 2.1.0
+description: Scan a Cargo workspace or package monorepo and generate/update per-member CLAUDE.md files. Each member directory gets a focused, self-contained CLAUDE.md with real exported surface, key files, dependencies, wiring points, and conventions. Run after coding sessions, refactors, or crate/package additions to keep the AI context map current.
 ---
 
 <EXTREMELY-IMPORTANT>
-Before writing ANY per-package CLAUDE.md, you **ABSOLUTELY MUST** complete Phase 1 discovery.
+Before writing ANY per-crate CLAUDE.md, you **ABSOLUTELY MUST** complete Phase 1 discovery.
 
-**SKIPPING DISCOVERY = INCOMPLETE PER-PACKAGE DOCS = CLAUDE SEARCHING BLINDLY**
+**SKIPPING DISCOVERY = INCOMPLETE PER-CRATE DOCS = CLAUDE SEARCHING BLINDLY**
 
 This is not optional. Each sub-directory CLAUDE.md must be self-contained.
 Claude lazy-loads these files — they ONLY load when Claude touches files in that directory.
-If the CLAUDE.md is incomplete, Claude has NO context for that package.
+If the CLAUDE.md is incomplete, Claude has NO context for that crate.
 </EXTREMELY-IMPORTANT>
 
-# Update CLAUDE.md for Monorepo
+# Update CLAUDE.md for Workspace
 
 ## MANDATORY FIRST RESPONSE PROTOCOL
 
 Before writing ANY documentation:
 
-1. ☐ Discover all `packages/*/` and `apps/*/` directories
-2. ☐ For each, count exports and identify key files
-3. ☐ Map inter-package dependencies
-4. ☐ Identify which packages have tests
-5. ☐ Announce: "Generating CLAUDE.md for X packages + Y apps, targeting 10/10"
+1. ☐ Detect project type: Cargo workspace (`Cargo.toml` with `[workspace]`) or Node monorepo (`package.json` with `workspaces`)
+2. ☐ Discover all member crates/packages
+3. ☐ For each, identify actual exported/public surface, not just raw `pub` or `export`
+4. ☐ Map inter-member dependencies
+5. ☐ Identify key files AND hidden wiring points (crate roots, barrels, manifests, startup hooks, registries, routers)
+6. ☐ Identify which members have tests, benchmarks, and runtime entry points
+7. ☐ Announce: "Generating CLAUDE.md for X crates/packages, targeting 10/10"
 
-**Writing per-package docs without discovery = guaranteed gaps. Phase 1 is NON-NEGOTIABLE.**
+**Writing per-crate docs without discovery = guaranteed gaps. Phase 1 is NON-NEGOTIABLE.**
 
 ## Overview
 
-In a monorepo, Claude Code **lazy-loads** subdirectory CLAUDE.md files — they only load when Claude touches files in that directory. Sibling packages never see each other's CLAUDE.md. This means each per-package CLAUDE.md must be **self-contained**: everything Claude needs to work effectively in that package, right there.
+In a monorepo/workspace, Claude Code **lazy-loads** subdirectory CLAUDE.md files — they only load when Claude touches files in that directory. Sibling crates never see each other's CLAUDE.md. This means each per-crate CLAUDE.md must be **self-contained**: everything Claude needs to work effectively in that crate, right there.
 
-This skill generates a focused CLAUDE.md for every `packages/*/` and `apps/*/` directory, then **simplifies** the root CLAUDE.md and reference files by pushing per-package detail down to where Claude actually needs it.
+This skill generates a focused CLAUDE.md for every workspace member directory, then **simplifies** the root CLAUDE.md by pushing per-crate detail down to where Claude actually needs it.
 
-**Core principle:** Detail lives where it's used. Root stays lean. Packages are self-contained.
+**Core principle:** Detail lives where it's used. Root stays lean. Crates are self-contained.
 
-**Quality target:** 10/10 — Claude should implement features correctly on first attempt in ANY package.
+**Quality target:** 10/10 — Claude should implement features correctly on first attempt in ANY crate.
+
+**Critical refinement:** map the real public surface and the hidden wiring surface. A member can look "documented" while still being incomplete if the docs miss:
+
+- root export files (`src/lib.rs`, `mod.rs`, `src/index.ts`, barrel files)
+- package or crate manifests (`Cargo.toml`, `package.json`, exports maps, feature flags)
+- startup/bootstrap files
+- router/registry/plugin registration points
+- feature-gated modules that affect what is actually reachable
 
 ## How Claude Code Loads Subdirectory CLAUDE.md
 
-Understanding the loading mechanism is critical:
-
 | Behavior | Detail |
 |----------|--------|
-| **Lazy loading** | `packages/foo/CLAUDE.md` loads ONLY when Claude reads/writes files under `packages/foo/` |
-| **No cross-loading** | Working in `packages/foo/` does NOT load `packages/bar/CLAUDE.md` |
+| **Lazy loading** | `crates/hgdb-storage/CLAUDE.md` loads ONLY when Claude reads/writes files under `crates/hgdb-storage/` |
+| **No cross-loading** | Working in `crates/hgdb-storage/` does NOT load `crates/hgdb-sql/CLAUDE.md` |
 | **Root always loads** | Root `CLAUDE.md` loads at startup for every session |
-| **@imports work** | Per-package CLAUDE.md can use `@` imports for shared reference files |
 | **Hierarchy** | Instructions from parent CLAUDE.md are inherited (root applies everywhere) |
 
-**Implication:** Per-package CLAUDE.md must include everything Claude needs for that package. Don't assume root-level detail will be available — keep root lean, push detail down.
+**Implication:** Per-crate CLAUDE.md must include everything Claude needs for that crate. Don't assume root-level detail will be available — keep root lean, push detail down.
 
 ## Context Budget
 
 | Component | Max Lines | Rationale |
 |-----------|-----------|-----------|
 | Root CLAUDE.md | 300 | Always loaded — keep it to project-wide info only |
-| Root @import files | 500 each | Lazy-loaded by topic, shared reference material |
-| Per-package CLAUDE.md | 50-200 | Lazy-loaded per directory, focused on that package |
-| Per-app CLAUDE.md | 80-250 | Lazy-loaded per directory, apps are more complex |
-
-**Why these limits:**
-- Root is ALWAYS in context — every token counts
-- Per-package files load only when needed — can be more detailed
-- But still concise — tables over prose, no duplication
+| Per-crate CLAUDE.md | 50-200 | Lazy-loaded per directory, focused on that crate |
 
 ## When to Use
 
-- **After monorepo refactor:** Single package split into many (e.g., `packages/core` → 12 packages)
-- **Package added/removed:** New package needs CLAUDE.md, removed package's docs are stale
-- **After running `map-project`:** Root docs exist but no per-package files
-- **Claude searches blindly:** Searching across 15+ packages for something in one package
-- **Periodic refresh:** User asks to update monorepo docs or sync CLAUDE.md files
-
-**Symptoms:**
-- Claude reads 10 files across 5 packages to find one function
-- No CLAUDE.md files exist in `packages/*/` or `apps/*/`
-- Root CLAUDE.md has 400+ line exports-reference trying to cover all packages
-- Claude uses wrong import patterns or outdated types for a specific package
-
-## When NOT to Use
-
-- **Single-package project:** Use `map-project` instead
-- **Only root needs updating:** Use `map-project` instead
-- **Monorepo with 1-2 packages:** Overhead not worth it — root docs suffice
+- **After workspace refactor:** Crates added, removed, or responsibilities shifted
+- **After coding session:** New public API, changed dependencies
+- **Claude searches blindly:** Reading 10 files across 5 crates to find one function
+- **Periodic refresh:** User asks to update workspace docs or sync CLAUDE.md files
 
 ---
 
-## Common Rationalizations (All Wrong)
+## Phase 1: Workspace Discovery (MANDATORY)
 
-- "The root CLAUDE.md already covers everything" → Root loads for ALL sessions; per-package loads ONLY when needed. Push detail down.
-- "Per-package CLAUDE.md will be redundant" → No — Claude doesn't see root @import files when working in a subdirectory unless they're loaded. Each package must stand alone.
-- "I'll just do the important packages" → ALL packages need CLAUDE.md. The one you skip is the one Claude will struggle with.
-- "50 lines isn't enough" → Tables compress information 3x. 50 lines of tables = 150 lines of prose.
-- "I can copy the same template everywhere" → Each package has different exports, dependencies, and conventions. Customize every file.
-- "The root exports-reference.md already has this" → Move it down. Root should have summary counts, not full export tables.
-- "Phase 1 takes too long for 15 packages" → Use parallel grep/find commands. Discovery takes 2 minutes. Skipping it costs 20 minutes of rework.
+**Gate: Complete inventory before writing ANY per-crate CLAUDE.md.**
 
----
+### For Rust Cargo Workspaces
 
-## Phase 1: Monorepo Discovery (MANDATORY)
-
-**Gate: Complete inventory before writing ANY per-package CLAUDE.md.**
-
-### Step 1: Find All Packages and Apps
+#### Step 1: Find All Crates
 
 ```bash
-# List all packages
-ls -d packages/*/package.json 2>/dev/null | sed 's|/package.json||'
+# List all workspace members
+grep -A 100 '^\[workspace\]' Cargo.toml | grep 'members' -A 50 | head -20
 
-# List all apps
-ls -d apps/*/package.json 2>/dev/null | sed 's|/package.json||'
+# Or list all Cargo.toml files
+find crates/ -name "Cargo.toml" -maxdepth 2 | sort
 ```
 
-### Step 2: Build Package Inventory
+#### Step 2: Build Crate Inventory
 
-For EACH package/app, collect:
+For EACH crate, collect:
 
 ```bash
-# Package name from package.json
-cat packages/*/package.json | jq -r '.name'
+# Crate name and dependencies
+for crate_dir in crates/*/; do
+  name=$(grep '^name' "$crate_dir/Cargo.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+  echo "=== $name ==="
+  # Count public items
+  grep -rh "^pub " "$crate_dir/src/" --include="*.rs" 2>/dev/null | wc -l
+  echo ""
+done
+```
 
-# Export count from index.ts
+Create inventory table:
+
+| Crate | Public Items | Export Surface | Has Tests | Has Benches | Key Role |
+|-------|-------------|----------------|-----------|-------------|----------|
+| hgdb-common | ? | ? | ? | Shared types, errors |
+| hgdb-storage | ? | ? | ? | WAL, segments, MVCC |
+| ... | ... | ... | ... | ... |
+
+#### Step 3: Map Inter-Crate Dependencies
+
+```bash
+# For each crate, find workspace dependencies
+for crate_dir in crates/*/; do
+  name=$(grep '^name' "$crate_dir/Cargo.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+  deps=$(grep 'path = ' "$crate_dir/Cargo.toml" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' | tr '\n' ', ')
+  echo "$name → $deps"
+done
+```
+
+#### Step 4: Extract Public API Per Crate
+
+For each crate, identify the actual export surface:
+
+```bash
+for crate_dir in crates/*/; do
+  name=$(grep '^name' "$crate_dir/Cargo.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+  echo "=== $name ==="
+  echo "-- crate root exports --"
+  sed -n '1,200p' "$crate_dir/src/lib.rs" 2>/dev/null | grep -E '^(pub use|pub mod|mod |use )'
+  echo "-- public items --"
+  grep -rh "^pub " "$crate_dir/src/" --include="*.rs" 2>/dev/null | head -30
+  echo ""
+done
+```
+
+**Important:** raw `pub` count is not the same as exported API.
+
+- Some `pub` items are internal to the crate and never re-exported.
+- Some crates export through `pub use` from submodules.
+- Some functionality is reachable only via feature flags.
+- Some packages export through `package.json` `exports` or `src/index.ts`, not by scanning every file.
+
+Document the surface that consumers actually reach first; treat raw `pub` / `export` counts as a discovery aid, not the source of truth.
+
+#### Step 5: Identify Key Files Per Crate
+
+```bash
+for crate_dir in crates/*/; do
+  name=$(grep '^name' "$crate_dir/Cargo.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+  echo "=== $name ==="
+  find "$crate_dir/src" -name "*.rs" | sort
+  echo ""
+done
+```
+
+#### Step 5a: Identify Hidden Wiring Files
+
+For each member, identify files that make the module/package actually usable:
+
+- crate/package roots: `src/lib.rs`, `src/main.rs`, `src/index.ts`, barrel files
+- manifests: `Cargo.toml`, `package.json`, exports maps, feature flags
+- registration points: routers, plugin registries, startup/bootstrap files, DI containers
+- generated or feature-gated entry points that shape the public surface
+
+Create a wiring inventory:
+
+| Member | Wiring Files | Why They Matter |
+|--------|--------------|-----------------|
+| hgdb-storage | `src/lib.rs`, `Cargo.toml` | exports modules, feature flags |
+| api-server | `src/index.ts`, `src/app.ts` | route registration, app bootstrap |
+
+**Rule:** if a future code change would require touching a file to make new functionality reachable, that file belongs in the member CLAUDE.md.
+
+#### Step 6: Check for Tests and Benchmarks
+
+```bash
+for crate_dir in crates/*/; do
+  name=$(grep '^name' "$crate_dir/Cargo.toml" | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+  tests=$(find "$crate_dir" -name "*.rs" -path "*/tests/*" 2>/dev/null | wc -l)
+  benches=$(find "$crate_dir" -name "*.rs" -path "*/benches/*" 2>/dev/null | wc -l)
+  cfg_tests=$(grep -rl "#\[cfg(test)\]" "$crate_dir/src/" --include="*.rs" 2>/dev/null | wc -l)
+  echo "$name: $tests integration tests, $cfg_tests files with unit tests, $benches benchmarks"
+done
+```
+
+#### Step 6a: Identify Runtime Entry Points and Cross-Member Consumers
+
+For each member, answer:
+
+- Who calls this member?
+- How is it reached at runtime?
+- Which files import it or register it?
+- Which examples or tests exercise its real public surface?
+
+Do not invent usage snippets. Prefer real consumers from the workspace.
+
+### For Node.js/TypeScript Monorepos
+
+Use the same phases but with Node tooling:
+
+```bash
+# Find packages
+ls -d packages/*/package.json apps/*/package.json 2>/dev/null
+
+# Count exports
 for pkg in packages/*/; do
   name=$(jq -r '.name' "$pkg/package.json" 2>/dev/null)
   count=$(grep -c "^export" "$pkg/src/index.ts" 2>/dev/null || echo 0)
@@ -130,355 +218,259 @@ for pkg in packages/*/; do
 done
 ```
 
-Create inventory table:
-
-| Package | Exports | Has Tests | Key Role |
-|---------|---------|-----------|----------|
-| @scope/contracts | ? | No | Shared types |
-| @scope/config | ? | No | Paths, env |
-| ... | ... | ... | ... |
-
-### Step 3: Map Inter-Package Dependencies
-
-For each package, find which other monorepo packages it imports:
-
-```bash
-# For each package, find internal dependencies
-for pkg in packages/*/; do
-  name=$(jq -r '.name' "$pkg/package.json" 2>/dev/null)
-  deps=$(grep -rh "from \"@" "$pkg/src/" --include="*.ts" 2>/dev/null | \
-    sed 's/.*from "\(@[^"]*\)".*/\1/' | sort -u | tr '\n' ', ')
-  echo "$name → $deps"
-done
-```
-
-### Step 4: Extract Exports Per Package
-
-For each package, list ALL exports:
-
-```bash
-# Full export listing per package
-for pkg in packages/*/; do
-  name=$(jq -r '.name' "$pkg/package.json" 2>/dev/null)
-  echo "=== $name ==="
-  grep "^export" "$pkg/src/index.ts" 2>/dev/null
-  echo ""
-done
-```
-
-### Step 5: Identify Key Files Per Package
-
-```bash
-# List source files per package
-for pkg in packages/*/; do
-  name=$(jq -r '.name' "$pkg/package.json" 2>/dev/null)
-  echo "=== $name ==="
-  find "$pkg/src" -name "*.ts" -not -name "*.test.ts" -not -name "*.spec.ts" | sort
-  echo ""
-done
-```
-
-### Step 6: Check for Tests
-
-```bash
-# Find which packages have tests
-for pkg in packages/*/; do
-  name=$(jq -r '.name' "$pkg/package.json" 2>/dev/null)
-  tests=$(find "$pkg" -name "*.test.ts" -o -name "*.spec.ts" 2>/dev/null | wc -l)
-  echo "$name: $tests test files"
-done
-```
-
 ### Phase 1 Gate
 
 Before proceeding, you MUST have:
 
-- [ ] List of ALL packages with export counts
-- [ ] List of ALL apps with descriptions
-- [ ] Inter-package dependency map
-- [ ] Key files per package
-- [ ] Test file inventory
-- [ ] Role description for each package (1-line purpose)
+- [ ] List of ALL crates/packages with public API counts
+- [ ] Actual exported/public surface for each member
+- [ ] Inter-crate dependency map
+- [ ] Key files per crate
+- [ ] Wiring/registration file inventory
+- [ ] Test and benchmark inventory
+- [ ] Role description for each crate (1-line purpose)
 
 ---
 
-## Phase 2: Per-Package CLAUDE.md Generation
+## Phase 2: Per-Crate CLAUDE.md Generation
 
-**Gate: EVERY package in `packages/*/` has a CLAUDE.md.**
+**Gate: EVERY crate has a CLAUDE.md.**
 
-For EACH package, create `packages/<name>/CLAUDE.md` using the template from `references/package-template.md`.
+### Required Sections Per Crate (Rust)
 
-### Required Sections Per Package
+Every per-crate CLAUDE.md MUST have:
 
-Every per-package CLAUDE.md MUST have:
+| Section | Purpose | Format |
+|---------|---------|--------|
+| **Header** | Crate name + 1-line purpose | `# hgdb-storage` + paragraph |
+| **Public API** | Actual exported surface | Table: Item, Kind, Purpose, Source |
+| **Key Files** | Source files with descriptions | Table: File, Purpose |
+| **Dependencies** | Which workspace crates are imported | Bullet list with what's used |
+| **Wiring & Entry Points** | Hidden files that expose/register behavior | Table: File, Role |
+| **Usage Pattern** | How other crates use this one | Code block with `use` statements |
+| **Architecture** | Key design decisions for THIS crate | Bullet list |
+| **Testing** | How to test, what test types exist | Commands + patterns |
+
+### Required Sections Per Package (Node.js)
 
 | Section | Purpose | Format |
 |---------|---------|--------|
 | **Header** | Package name + 1-line purpose | `# @scope/name` + paragraph |
-| **Exports** | ALL exported items | Table: Export, Kind, Purpose |
+| **Exports** | Actual exported surface | Table: Export, Kind, Purpose, Source |
 | **Key Files** | Source files with descriptions | Table: File, Purpose |
 | **Dependencies** | Which @scope/* packages are imported | Bullet list |
+| **Wiring & Entry Points** | Barrels, app bootstrap, route/plugin registration | Table: File, Role |
 | **Import Pattern** | How consumers import from this package | Code block |
-| **Conventions** | Package-specific rules | Bullet list or table |
+| **Conventions** | Package-specific rules | Bullet list |
 | **Testing** | How to test (if tests exist) | Command + pattern |
+
+### Per-Crate Template (Rust)
+
+````markdown
+# hgdb-<name>
+
+[1-2 sentence purpose. What does this crate do? What problem does it solve?]
+
+## Public API
+
+| Item | Kind | Purpose | Source |
+|------|------|---------|--------|
+| `StructName` | struct | What it represents | `src/lib.rs` re-export |
+| `TraitName` | trait | What contract it defines | `src/trait_mod.rs` |
+| `function_name` | fn | What it does | `src/lib.rs` |
+| `ErrorType` | enum | Error variants for this crate | `src/error.rs` |
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/lib.rs` | Crate root, re-exports public API |
+| `src/wal/mod.rs` | WAL writer, group commit, crash recovery |
+| ... | ... |
+
+## Dependencies
+
+Imports from these workspace crates:
+
+- `hgdb-common` — types: `RowId`, `TxnId`, errors: `HgdbError`
+- `hgdb-types` — formats: `Bmap`, `Barr`, type coercion
+
+## Wiring & Entry Points
+
+| File | Role |
+|------|------|
+| `src/lib.rs` | Public export surface |
+| `Cargo.toml` | Features, optional deps, crate metadata |
+| `src/startup.rs` | Runtime registration/bootstrap (if applicable) |
+
+## Usage Pattern
+
+```rust
+use hgdb_storage::{Wal, Memtable, SegmentWriter, Reader};
+use hgdb_storage::btree::BTreeIndex;
+```
+
+## Architecture
+
+- [Key design decisions specific to THIS crate]
+- [What's locked in CLAUDE.md that affects this crate]
+- [What is NOT in this crate (common confusion points)]
+
+## Testing
+
+```bash
+cargo test -p hgdb-<name>
+cargo test -p hgdb-<name> -- --ignored  # slow/integration tests
+```
+
+- Unit tests: `#[cfg(test)]` modules in source files
+- Integration tests: `tests/` directory
+- Proptest: `proptest!` blocks for invariant checking
+- Benchmarks: `benches/` directory (if applicable)
+````
 
 ### Content Quality Rules
 
-1. **Export tables must be COMPLETE** — every `export` from `index.ts` appears in the table
-2. **Key files must list ALL source files** — not just "the important ones"
-3. **Dependencies must be accurate** — grep the actual imports, don't guess
-4. **Import patterns must show real examples** — from actual consumers in the monorepo
-5. **No prose paragraphs** — tables and bullet lists only. Save tokens.
+1. **Public API table must describe the actual exported surface** — not just raw `pub` items
+2. **If a member exports via barrel/root files, document the barrel/root first**
+3. **Key files must list all source files that matter plus all hidden wiring files**
+4. **Dependencies must be actual imports** — grep the source, don't guess
+5. **Usage patterns must show real examples** — from actual consumers in the workspace
+6. **Architecture must reference root CLAUDE.md decisions** — if the root locks a decision that affects this member, say so
+7. **Call out what is not owned here** — common confusion points, delegated responsibility, upstream/downstream owners
+8. **Run a drift check** — if docs say "not implemented" but code exists, or docs imply exported surface that is unreachable, fix the docs
+9. **No prose paragraphs** — tables and bullet lists only. Save tokens.
 
-### Package CLAUDE.md Size Guide
+### Size Guide
 
-| Package Complexity | Target Lines | Example |
-|-------------------|-------------|---------|
-| Foundation (types only) | 50-80 | contracts, config |
-| Engine (5-15 exports) | 80-120 | session-engine, projects-engine |
-| Engine (15-40 exports) | 120-180 | guards-engine, history-engine |
-| Engine (40+ exports) | 150-200 | review-engine (with schemas) |
-
----
-
-## Phase 3: Per-App CLAUDE.md Generation
-
-**Gate: EVERY app in `apps/*/` has a CLAUDE.md.**
-
-Apps are more complex than packages. Use the template from `references/app-template.md`.
-
-### Required Sections Per App
-
-Every per-app CLAUDE.md MUST have:
-
-| Section | Purpose | Format |
-|---------|---------|--------|
-| **Header** | App name + purpose | `# @scope/name` + paragraph |
-| **File Structure** | Directory tree with descriptions | Tree + table |
-| **Entry Points** | Main files and their roles | Table |
-| **Commands** | Build, start, test commands | Table |
-| **Dependencies** | Which @scope/* packages are imported | Table with purpose |
-| **Key Patterns** | Architecture patterns used | Descriptions + examples |
-
-### App-Specific Sections
-
-**For API/Server apps, also include:**
-- Route table (ALL routes with methods, handlers)
-- Middleware stack
-- Request/response patterns with types
-
-**For CLI apps, also include:**
-- Command table (all commands with descriptions)
-- Hook handler table (if applicable)
-- stdin/stdout patterns
-
-**For Web UI apps, also include:**
-- Pages table (route → component)
-- Key components list
-- State management patterns
-- API integration patterns
-
-### App CLAUDE.md Size Guide
-
-| App Type | Target Lines | Example |
-|----------|-------------|---------|
-| API server | 150-250 | api (routes, middleware, patterns) |
-| CLI tool | 120-200 | cli (commands, hooks, entry points) |
-| Web UI | 120-200 | web-ui (pages, components, patterns) |
+| Crate Complexity | Target Lines | Example |
+|-----------------|-------------|---------|
+| Foundation (types, errors) | 50-80 | hgdb-common, hgdb-types |
+| Engine (moderate API) | 80-150 | hgdb-doc, hgdb-sql |
+| Core (large API) | 150-200 | hgdb-storage |
+| Binary (entry point) | 50-80 | hgdb |
 
 ---
 
-## Phase 4: Root Simplification
+## Phase 3: Root Simplification
 
-**Gate: Root CLAUDE.md + reference files simplified. No per-package detail in root.**
+**Gate: Root CLAUDE.md simplified. No per-crate detail in root.**
 
-After generating per-package CLAUDE.md files, simplify the root:
+**CRITICAL: NEVER remove or modify locked architectural decisions in root CLAUDE.md.** The root CLAUDE.md may contain steering decisions, locked architecture, testing requirements, competitive positioning, and other project-level constraints that are NOT per-crate detail. These MUST be preserved exactly as-is. Only move per-crate detail (public API tables, file listings, crate-specific patterns) to per-crate files. When in doubt, leave it in root.
 
-### What STAYS in Root CLAUDE.md
+### What STAYS in Root CLAUDE.md (DO NOT TOUCH)
 
-- Project name + 1-line description
-- Package map table (name + 1-line purpose — NO export counts)
-- Global conventions (ESM, bare imports, build commands)
-- Quick reference table (which file to read)
-- @imports for shared reference files
-- Skills, agents, plugins table
-- Hook handlers table (cross-cutting concern)
-- Type gotchas (cross-cutting concern)
+- Project name + core principle
+- **ALL locked architectural decisions** (even if they mention specific crates — they are project-wide constraints)
+- Workspace layout table (crate name + 1-line purpose)
+- Global conventions (Rust edition, clippy config, testing policy)
+- Testing requirements section
+- Competitive positioning, branding
+- Reference to docs/ for detailed specs
 
-### What MOVES to Per-Package CLAUDE.md
+### What MOVES to Per-Crate CLAUDE.md
 
-- Per-package export tables → each package's own CLAUDE.md
-- Per-package file listings → each package's own CLAUDE.md
-- Package-specific conventions → each package's own CLAUDE.md
-
-### What STAYS in Root Reference Files
-
-**architecture.md:**
-- High-level dependency graph (package relationships)
-- Data flow diagrams (cross-package flows)
-- State machines (cross-cutting concepts)
-- API routes table (quick lookup — detail in apps/api/CLAUDE.md)
-
-**development-guide.md:**
-- Cross-cutting "how to add a new X" guides
-- Response formats (shared across API)
-- Error handling patterns (shared)
-- Testing patterns (shared)
-
-**exports-reference.md:**
-- Summary table ONLY (package name + export count + 1-line purpose)
-- Import patterns section (how to import from each package)
-- Remove per-export detail — that now lives in per-package CLAUDE.md
+- Per-crate public API listings (if any exist in root — unlikely for a well-structured root)
+- Per-crate file descriptions
+- Per-crate wiring/registration notes
+- Crate-specific testing instructions (not the global testing policy)
 
 ### Root Simplification Checklist
 
-- [ ] Root CLAUDE.md is ≤ 300 lines
-- [ ] exports-reference.md has summary table only (≤ 150 lines)
-- [ ] architecture.md has no per-package file listings (≤ 400 lines)
-- [ ] development-guide.md has no per-package export tables (≤ 500 lines)
-- [ ] No per-package detail duplicated between root and subdirectory files
+- [ ] Root CLAUDE.md architectural decisions are UNCHANGED (diff check — no deletions in architecture sections)
+- [ ] Root CLAUDE.md is ≤ 300 lines (if already under, no simplification needed)
+- [ ] No per-crate public API detail in root
+- [ ] Per-crate CLAUDE.md does not repeat root conventions verbatim
 
 ---
 
-## Phase 5: Verification (MANDATORY)
+## Phase 4: Verification (MANDATORY)
 
 **Gate: ALL checks pass before marking complete.**
 
 ### Check 1: Coverage
 
 ```bash
-# Count packages/apps that need CLAUDE.md
-TOTAL=$(ls -d packages/*/package.json apps/*/package.json 2>/dev/null | wc -l)
-
-# Count generated CLAUDE.md files
-GENERATED=$(ls packages/*/CLAUDE.md apps/*/CLAUDE.md 2>/dev/null | wc -l)
-
+# Count crates that need CLAUDE.md
+TOTAL=$(find crates/ -name "Cargo.toml" -maxdepth 2 | wc -l)
+GENERATED=$(find crates/ -name "CLAUDE.md" -maxdepth 2 | wc -l)
 echo "Coverage: $GENERATED / $TOTAL"
 ```
 
-**FAIL if:** Any package/app is missing CLAUDE.md
+**FAIL if:** Any crate is missing CLAUDE.md
 
-### Check 2: Export Completeness
+### Check 2: Public API Completeness
 
-For each package, verify export coverage:
+For each crate, verify public API coverage:
 
 ```bash
-for pkg in packages/*/; do
-  actual=$(grep -c "^export" "$pkg/src/index.ts" 2>/dev/null || echo 0)
-  documented=$(grep -c "^|" "$pkg/CLAUDE.md" 2>/dev/null || echo 0)
-  name=$(basename "$pkg")
-  echo "$name: $documented documented / $actual exports"
+for crate_dir in crates/*/; do
+  actual=$(grep -rh "^pub " "$crate_dir/src/" --include="*.rs" 2>/dev/null | wc -l)
+  documented=$(grep -c "^|" "$crate_dir/CLAUDE.md" 2>/dev/null || echo 0)
+  name=$(basename "$crate_dir")
+  echo "$name: $documented documented / $actual pub items"
 done
 ```
 
-**FAIL if:** Any package has < 90% export coverage
+**But do not stop there.** This check is only a coarse signal.
+
+Also verify:
+
+- [ ] `lib.rs` / barrel exports are represented in the docs
+- [ ] feature-gated exports are called out when relevant
+- [ ] documented API is reachable from the consumer surface, not just `pub` internally
 
 ### Check 3: Context Budget
 
 ```bash
-# Root files
 wc -l CLAUDE.md
-wc -l .claude/claude-md-refs/*.md
-
-# Per-package files
-for f in packages/*/CLAUDE.md apps/*/CLAUDE.md; do
-  wc -l "$f"
-done
+for f in crates/*/CLAUDE.md; do wc -l "$f"; done
 ```
 
 **FAIL if:**
 - Root CLAUDE.md > 300 lines
-- Any per-package CLAUDE.md > 200 lines
-- Any per-app CLAUDE.md > 250 lines
+- Any per-crate CLAUDE.md > 200 lines
 
 ### Check 4: Self-Containment
 
-For each per-package CLAUDE.md, verify it answers:
+For each per-crate CLAUDE.md, verify it answers:
 
-- [ ] What does this package do? (header)
-- [ ] What does it export? (exports table)
+- [ ] What does this crate do? (header)
+- [ ] What does it export? (public API table)
 - [ ] What files does it contain? (key files)
 - [ ] What does it depend on? (dependencies)
-- [ ] How do I import from it? (import pattern)
+- [ ] What files expose or register it? (wiring/entry points)
+- [ ] How do I use it? (usage pattern)
+- [ ] How do I test it? (testing section)
 
 ### Check 5: No Duplication
 
-Verify per-package export details are NOT duplicated in root reference files:
+- [ ] Root CLAUDE.md has no per-crate public API listings
+- [ ] Per-crate CLAUDE.md does not repeat root architectural decisions verbatim
 
-- [ ] exports-reference.md has summary table only — no per-export rows
-- [ ] Root CLAUDE.md has no per-package file listings
-- [ ] Per-package CLAUDE.md does not repeat root conventions
+### Check 6: Wiring and Drift
 
-### Check 6: Root Simplified
+For each member, verify:
 
-- [ ] Root CLAUDE.md is ≤ 300 lines (down from previous size)
-- [ ] exports-reference.md is ≤ 150 lines (summary only)
-- [ ] No per-package detail remains in root files
+- [ ] hidden wiring files are documented
+- [ ] startup/bootstrap/registration points are called out when applicable
+- [ ] manifests that shape exports/features are documented when relevant
+- [ ] no stale claims like "not implemented yet" when the code exists
+- [ ] no stale claims that something is exported/registered when it is not actually reachable
 
 ---
 
 ## Quality Checklist (Must Score 10/10)
 
-### Coverage (0-2 points)
-- **0:** Some packages missing CLAUDE.md
-- **1:** All packages have CLAUDE.md but some incomplete
-- **2:** Every package and app has complete CLAUDE.md
-
-### Export Completeness (0-2 points)
-- **0:** <50% of exports documented per package
-- **1:** 50-89% coverage
-- **2:** >90% coverage in every package
-
-### Self-Containment (0-2 points)
-- **0:** Per-package docs reference root files for basic info
-- **1:** Mostly self-contained but missing some context
-- **2:** Each CLAUDE.md is fully self-contained for its package
-
-### Root Simplification (0-2 points)
-- **0:** Root still has per-package detail
-- **1:** Some detail moved but root still verbose
-- **2:** Root is lean (≤300 lines), detail pushed to packages
-
-### Context Efficiency (0-2 points)
-- **0:** Over budget or heavy duplication
-- **1:** Within budget but some duplication
-- **2:** Within budget, zero duplication, tables over prose
+| Category | 0 | 1 | 2 |
+|----------|---|---|---|
+| **Coverage** | Some members missing | All have CLAUDE.md but incomplete | Every member complete |
+| **API Surface Accuracy** | Raw visibility only | Mostly accurate | Real exported surface documented |
+| **Self-Containment + Wiring** | Missing key basics | Mostly standalone | Fully standalone with wiring points |
+| **Root Simplification** | Root has per-member detail | Some moved | Root ≤300 lines, clean |
+| **Drift + Efficiency** | Stale or duplicated | Minor drift/duplication | No stale claims, efficient context |
 
 **Total: 10/10 required to complete this skill**
-
----
-
-## Failure Modes
-
-### Failure Mode 1: Copy-Paste Templates
-
-**Symptom:** All per-package CLAUDE.md files look identical with placeholder text
-**Fix:** Each file must have actual exports, actual file names, actual dependencies from discovery.
-
-### Failure Mode 2: Root Not Simplified
-
-**Symptom:** Per-package files created but root CLAUDE.md still 500+ lines with full export tables
-**Fix:** Phase 4 is mandatory. Move detail down, slim root to ≤300 lines.
-
-### Failure Mode 3: Missing Packages
-
-**Symptom:** 10 of 12 packages have CLAUDE.md, 2 skipped
-**Fix:** Check 1 catches this. Every package, no exceptions.
-
-### Failure Mode 4: Incomplete Exports
-
-**Symptom:** Package has 43 exports but CLAUDE.md only lists 20
-**Fix:** Use grep to get actual count, verify table row count matches.
-
-### Failure Mode 5: Broken Cross-References
-
-**Symptom:** Per-package CLAUDE.md references root @import that moved
-**Fix:** Per-package files should be self-contained. No @imports to root reference files.
-
-### Failure Mode 6: Prose Instead of Tables
-
-**Symptom:** Per-package CLAUDE.md is 300 lines of paragraphs
-**Fix:** Tables compress 3x. A 40-export package needs a 40-row table, not 40 paragraphs.
 
 ---
 
@@ -486,113 +478,53 @@ Verify per-package export details are NOT duplicated in root reference files:
 
 ```
 PHASE 1: DISCOVERY (Do not skip)
-├── Find all packages/ and apps/ directories
-├── Count exports per package
-├── Map inter-package dependencies
-├── List key files per package
-├── Check for test files
+├── Detect project type (Cargo workspace or Node monorepo)
+├── Find all crates/packages
+├── Count visible public items per member
+├── Identify actual exported/public surface
+├── Map inter-crate dependencies
+├── List key files per crate
+├── Identify wiring files and runtime entry points
+├── Check for tests and benchmarks
 └── Gate: Complete inventory
 
-PHASE 2: PER-PACKAGE CLAUDE.md (Every package)
+PHASE 2: PER-CRATE CLAUDE.md (Every crate)
 ├── Header + purpose
-├── Exports table (ALL exports)
+├── Public API table (actual exported surface)
 ├── Key files table
 ├── Dependencies list
-├── Import patterns
-├── Conventions + testing
-└── Gate: Every package has CLAUDE.md
+├── Wiring & entry points
+├── Usage patterns
+├── Architecture notes (reference root decisions)
+├── Testing instructions
+└── Gate: Every crate has CLAUDE.md
 
-PHASE 3: PER-APP CLAUDE.md (Every app)
-├── Header + purpose
-├── File structure + entry points
-├── Commands table
-├── Dependencies with purposes
-├── App-specific sections (routes/commands/pages)
-└── Gate: Every app has CLAUDE.md
-
-PHASE 4: ROOT SIMPLIFICATION
-├── Slim root CLAUDE.md to ≤300 lines
-├── Slim exports-reference.md to summary table only
-├── Remove per-package detail from root files
-├── Keep cross-cutting concerns in root
+PHASE 3: ROOT SIMPLIFICATION
+├── Push per-crate detail to crate CLAUDE.md
+├── Slim root to ≤300 lines
+├── Keep only project-wide info in root
 └── Gate: Root simplified, no duplication
 
-PHASE 5: VERIFICATION (All must pass)
-├── Check 1: Every package/app has CLAUDE.md
-├── Check 2: >90% export coverage per package
+PHASE 4: VERIFICATION (All must pass)
+├── Check 1: Every crate has CLAUDE.md
+├── Check 2: API surface documented accurately
 ├── Check 3: Context budget met
 ├── Check 4: Self-containment verified
 ├── Check 5: No duplication
-├── Check 6: Root simplified
-└── Gate: All 6 checks pass
+├── Check 6: Wiring and drift verified
+└── Gate: All checks pass
 
 COMPLETE: Announce final quality score (must be 10/10)
 ```
 
 ---
 
-## Completion Announcement
-
-When done, announce:
-
-```
-Monorepo CLAUDE.md generation complete.
-
-**Quality Score: X/10**
-- Coverage: X/2 (N packages + M apps documented)
-- Export Completeness: X/2 (>90% per package)
-- Self-Containment: X/2
-- Root Simplification: X/2 (root: N lines, was M lines)
-- Context Efficiency: X/2
-
-**Files created:**
-- packages/contracts/CLAUDE.md: X lines
-- packages/config/CLAUDE.md: X lines
-- [... all packages ...]
-- apps/api/CLAUDE.md: X lines
-- apps/cli/CLAUDE.md: X lines
-- apps/web-ui/CLAUDE.md: X lines
-
-**Root simplified:**
-- CLAUDE.md: X lines (was Y)
-- exports-reference.md: X lines (was Y)
-
-**Verification passed:** All 6 checks complete.
-```
-
----
-
 ## Integration with Other Skills
 
-- **`map-project`** — Use that for single-package projects or root-only updates. Use THIS skill for monorepo per-package docs.
-- **`start`** — Start skill identifies if monorepo docs are needed
-- **`rebuild`** — After rebuild, run this if packages were added/removed
-
-**Workflow:**
-```
-New package added
-       │
-       ▼
-rebuild skill (verify build)
-       │
-       ▼
-map-project-monorepo (this skill)
-       │
-       ▼
-commit skill (commit the new CLAUDE.md files)
-```
+- **`map-project`** — Use for single-crate projects or root-only updates
+- **`start`** — Start skill identifies if workspace docs are needed
+- **`commit`** — After generating CLAUDE.md files, commit them
 
 ---
 
-## References
-
-See `references/` for templates:
-
-| Reference | Purpose |
-|-----------|---------|
-| `package-template.md` | Template for per-package CLAUDE.md with all required sections |
-| `app-template.md` | Template for per-app CLAUDE.md with app-type-specific sections |
-
----
-
-_This skill ensures every package and app in a monorepo has focused, self-contained documentation that loads exactly when Claude needs it._
+_This skill ensures every crate in a workspace has focused, self-contained documentation that loads exactly when Claude needs it._

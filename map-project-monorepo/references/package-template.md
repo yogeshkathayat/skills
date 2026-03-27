@@ -1,10 +1,75 @@
-# Per-Package CLAUDE.md Template
+# Per-Crate / Per-Package CLAUDE.md Template
 
-Use this template for every `packages/*/CLAUDE.md`. Replace ALL placeholders with actual values from Phase 1 discovery.
+Use the appropriate template based on project type. Replace ALL placeholders with actual values from Phase 1 discovery.
 
 ---
 
-## Template
+## Rust Crate Template
+
+````markdown
+# hgdb-<name>
+
+[1-2 sentence purpose. What does this crate do? What problem does it solve?]
+
+## Public API ([N] items)
+
+| Item | Kind | Purpose |
+|------|------|---------|
+| `TypeName` | struct | What it represents |
+| `TraitName` | trait | What contract it defines |
+| `function_name` | fn | What it does |
+| `ErrorType` | enum | Error variants for this crate |
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/lib.rs` | Crate root, re-exports public API |
+| `src/module/mod.rs` | [What this module does] |
+| ... | ... |
+
+## Dependencies
+
+Imports from these workspace crates:
+
+- `hgdb-common` — types: `RowId`, `TxnId`; errors: `HgdbError`
+- `hgdb-types` — formats: `Bmap`, `Barr`; coercion: `coerce_type`
+
+External dependencies:
+
+- `tokio` — async runtime
+- `bytes` — zero-copy buffer sharing
+
+## Usage Pattern
+
+```rust
+// How other crates use this one
+use hgdb_<name>::{TypeA, TypeB, function_a};
+```
+
+## Architecture
+
+- [Key design decisions specific to THIS crate]
+- [What's locked in root CLAUDE.md that affects this crate]
+- [What is NOT in this crate (common confusion points)]
+
+## Testing
+
+```bash
+cargo test -p hgdb-<name>
+cargo test -p hgdb-<name> -- --ignored  # slow/integration tests
+cargo bench -p hgdb-<name>              # if benchmarks exist
+```
+
+- Unit tests: `#[cfg(test)]` modules in source files
+- Integration tests: `tests/` directory
+- Proptest: invariant checking (if applicable)
+- Benchmarks: `benches/` directory (if applicable)
+````
+
+---
+
+## Node.js/TypeScript Package Template
 
 ````markdown
 # @scope/package-name
@@ -36,66 +101,60 @@ Imports from these monorepo packages:
 ## Import Pattern
 
 ```typescript
-// How consumers use this package
 import { ExportA, ExportB } from "@scope/package-name";
 import type { TypeA, TypeB } from "@scope/package-name";
 ```
 
 ## Conventions
 
-- [Package-specific conventions, e.g., "All detectors return DetectedItem | null"]
+- [Package-specific conventions]
 - [Build tool: tsc or tsup]
-- [Any gotchas specific to this package]
 
 ## Testing
 
 ```bash
-# If tests exist
 pnpm --filter @scope/package-name test
 ```
-
-Test files in `src/__tests__/`. Uses Vitest.
 ````
 
 ---
 
 ## Size Guidelines
 
-| Package Type | Target Lines | Notes |
-|-------------|-------------|-------|
-| Types-only (contracts) | 50-80 | Large export table, minimal prose |
-| Config/paths | 50-80 | Constants + functions table |
-| Small engine (5-15 exports) | 80-120 | Focused, few files |
-| Medium engine (15-40 exports) | 120-180 | Larger export table |
-| Large engine (40+ exports) | 150-200 | May need sub-sections in exports |
+| Crate/Package Type | Target Lines | Notes |
+|-------------------|-------------|-------|
+| Foundation (types, errors, config) | 50-80 | Large API table, minimal prose |
+| Engine (moderate API surface) | 80-150 | Focused, clear boundaries |
+| Core (large API, many modules) | 150-200 | May need sub-sections |
+| Binary (entry point) | 50-80 | Wiring only |
 
 ## Rules
 
-1. **Every export in `src/index.ts` must appear in the Exports table** — no exceptions
-2. **Every `.ts` file in `src/` must appear in Key Files** — skip only `index.ts` if it's just re-exports
+1. **Every `pub` item must appear in the Public API table** — no exceptions
+2. **Every source file must appear in Key Files** — with accurate descriptions
 3. **Dependencies must be actual imports** — grep the source, don't guess
-4. **Import Pattern must show real usage** — find an actual consumer in the monorepo
+4. **Usage patterns must show real examples** — from actual consumers in the workspace
 5. **No prose paragraphs** — tables and bullet lists ONLY
-6. **No duplication with root** — don't repeat global conventions (ESM, bare imports)
+6. **No duplication with root** — don't repeat global conventions
 
 ## Examples of Good vs Bad
 
-**Bad export row:**
+**Bad public API row:**
 ```
-| parseRules | function | Parses rules |
+| Wal | struct | WAL struct |
 ```
 
-**Good export row:**
+**Good public API row:**
 ```
-| parseRules | function | Parse YAML string to RulesConfig (validates with Zod) |
+| Wal | struct | Write-ahead log with group commit, crash recovery, and engine hint filtering |
 ```
 
 **Bad key file:**
 ```
-| `src/utils.ts` | Utilities |
+| `src/utils.rs` | Utilities |
 ```
 
 **Good key file:**
 ```
-| `src/matchers.ts` | Tool name, file pattern, and command matching with glob support |
+| `src/wal/writer.rs` | Append-only WAL writer with group commit batching and fsync |
 ```
