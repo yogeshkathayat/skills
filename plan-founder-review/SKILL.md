@@ -1,10 +1,11 @@
 ---
 name: plan-founder-review
-version: 1.0.0
+version: 1.1.0
 description: |
   Technical founder review of a plan before execution. Reads a plan from .ulpi/plans/<name>.md,
-  verifies file paths exist, challenges scope and architecture decisions, audits risk coverage
-  and test gaps, scores sections, and delivers a verdict (APPROVE/REVISE/REJECT).
+  verifies file paths exist, checks markdown/JSON consistency, challenges scope and architecture
+  decisions, audits prerequisites/contracts/risk coverage/test gaps, scores sections, and
+  delivers a verdict (APPROVE/REVISE/REJECT).
   Invoke via /plan-founder-review or when user says "review my plan", "check the plan".
 ---
 
@@ -12,10 +13,11 @@ description: |
 Before delivering ANY verdict on a plan, you **ABSOLUTELY MUST**:
 
 1. Read the full plan file from `.ulpi/plans/<name>.md`
-2. Verify that file paths referenced in the plan actually exist (Glob/Read)
-3. Search for existing code the plan proposes to build from scratch
-4. Check that the architecture diagram matches the task descriptions
-5. Never rubber-stamp a plan — if you find nothing wrong, you missed something
+2. Read the companion `.ulpi/plans/<name>.json` if it exists
+3. Verify that file paths referenced in the plan actually exist (Glob/Read)
+4. Search for existing code the plan proposes to build from scratch
+5. Check that the architecture diagram matches the task descriptions
+6. Never rubber-stamp a plan — if you find nothing wrong, you missed something
 
 **Approving a bad plan = wasted agent execution, wrong code built, rework**
 
@@ -29,18 +31,19 @@ This is not optional. Every plan gets real scrutiny.
 Before delivering ANY findings, you **MUST** complete this checklist:
 
 1. [ ] Read the full plan file from `.ulpi/plans/<name>.md`
-2. [ ] Count tasks and identify the plan's mode (EXPANSION/HOLD/REDUCTION)
-3. [ ] Select review mode (FULL or QUICK — see Mode Selection below)
-4. [ ] Run codebase reality check on every file path in the plan
-5. [ ] Complete all sections required by the selected mode
-6. [ ] Score each section and determine verdict
-7. [ ] Announce: "Founder Review: [Plan Title] | Mode: FULL/QUICK | Verdict: APPROVE/REVISE/REJECT"
+2. [ ] Read the companion JSON file if present and compare against markdown
+3. [ ] Count tasks and identify the plan's mode (EXPANSION/HOLD/REDUCTION)
+4. [ ] Select review mode (FULL or QUICK — see Mode Selection below)
+5. [ ] Run codebase reality check on every file path in the plan
+6. [ ] Complete all sections required by the selected mode
+7. [ ] Score each section and determine verdict
+8. [ ] Announce: "Founder Review: [Plan Title] | Mode: FULL/QUICK | Verdict: APPROVE/REVISE/REJECT"
 
 **Delivering a verdict WITHOUT completing this checklist = rubber-stamping.**
 
 ## Overview
 
-Review a plan produced by `plan-to-task-list-with-dag` before agents execute it. Catch problems that are expensive to fix after execution starts: phantom file paths, building what already exists, scope drift, missing failure modes, test gaps, and DAG inefficiency.
+Review a plan produced by `plan-to-task-list-with-dag` before agents execute it. Catch problems that are expensive to fix after execution starts: phantom file paths, markdown/JSON drift, hidden prerequisites, vague contracts, missing failure modes, test gaps, and DAG inefficiency.
 
 **What this skill does:**
 - Reads a plan file and verifies its claims against the actual codebase
@@ -110,25 +113,27 @@ The review adapts to plan complexity. Mode is auto-selected but can be overridde
 
 ### Step 0: Load Plan
 
-**Gate: Plan loaded and mode selected before proceeding to Step 1.**
+**Gate: Plan loaded, markdown/JSON relationship understood, and mode selected before proceeding to Step 1.**
 
 1. Locate the plan file:
    - If $ARGUMENTS contains a name: read `.ulpi/plans/<name>.md`
    - If no argument: list `.ulpi/plans/` directory and pick the most recently modified `.md` file
    - If no plans directory or no files: STOP — "No plan found. Generate one with `/plan-to-task-list-with-dag` first."
 2. Read the full plan file
-3. Extract: title, mode (EXPANSION/HOLD/REDUCTION), task count, task IDs, file paths, dependency JSON
-4. Auto-select review mode:
+3. Locate and read the companion `.json` plan file if it exists
+4. Extract: title, mode (EXPANSION/HOLD/REDUCTION), task count, task IDs, file paths, dependency JSON, prerequisites, contracts, execution summary
+5. Verify whether JSON appears to be the canonical source of truth and whether markdown matches it
+6. Auto-select review mode:
    - 5+ tasks OR EXPANSION mode → FULL
    - <5 tasks AND (HOLD or REDUCTION) → QUICK
-5. If `--full` or `--quick` in $ARGUMENTS, override the auto-selection
-6. Announce: "Reviewing **[Plan Title]** — [N] tasks, [MODE] mode → [FULL/QUICK] review"
+7. If `--full` or `--quick` in $ARGUMENTS, override the auto-selection
+8. Announce: "Reviewing **[Plan Title]** — [N] tasks, [MODE] mode → [FULL/QUICK] review"
 
 ---
 
 ### Step 1: Codebase Reality Check
 
-**Gate: Every file path in the plan verified before proceeding to Step 2.**
+**Gate: Every file path and reuse claim in the plan verified before proceeding to Step 2.**
 
 For every file path referenced in the plan (both `filesToModify` and `filesToCreate`):
 
@@ -136,10 +141,12 @@ For every file path referenced in the plan (both `filesToModify` and `filesToCre
 2. **Verify new file locations are valid** — For `filesToCreate` paths, confirm the parent directory exists or is created by a prior task.
 3. **Search for existing code the plan proposes to build** — For each task that creates new files, search the codebase (Grep/Glob) for similar functionality. If it already exists, flag as BLOCK.
 4. **Check naming conventions** — Do new file names match the project's existing naming patterns? (e.g., kebab-case vs camelCase, `.service.ts` vs `Service.ts`)
+5. **Validate reuse-source honesty** — If the plan claims local reuse, verify the path exists locally. If the input is external research, docs, or a local clone outside the repo, it must not be presented as checked-in leverage.
+6. **Check markdown/JSON path consistency** — Ensure the same files and tasks are represented in both artifacts.
 
 **Classify findings:**
-- BLOCK: phantom file path (references a file that doesn't exist as "modify"), building functionality that already exists
-- CONCERN: parent directory doesn't exist for new file, naming convention mismatch
+- BLOCK: phantom file path (references a file that doesn't exist as "modify"), building functionality that already exists, markdown/JSON path drift that changes execution meaning
+- CONCERN: parent directory doesn't exist for new file, naming convention mismatch, local-vs-external reuse claim mismatch
 - OBSERVATION: similar code exists that could be extended instead of building new
 
 Read the checklist file located alongside this skill at the relative path `references/review-checklist.md` for detailed check items.
@@ -150,7 +157,7 @@ Read the checklist file located alongside this skill at the relative path `refer
 
 ### Step 2: Scope & Strategy
 
-**Gate: Scope alignment verified before proceeding to Step 3.**
+**Gate: Scope alignment, prerequisites, and cut line verified before proceeding to Step 3.**
 
 1. **Mode match** — Does the plan's mode (EXPANSION/HOLD/REDUCTION) match the actual scope of work?
    - EXPANSION mode with <5 tasks → possible under-scoping
@@ -159,10 +166,13 @@ Read the checklist file located alongside this skill at the relative path `refer
 2. **Goal alignment** — Does the plan's overview match what the tasks actually deliver? Read every task title and compare against the stated goal.
 3. **Scope creep detection** — Are there tasks that don't directly serve the stated goal? Flag tasks that are "nice-to-have" disguised as "must-have."
 4. **Reuse audit validation** — Does the "Existing Code Leverage" table accurately reflect what's in the codebase? (Cross-reference with Step 1 findings)
+5. **Prerequisite honesty** — Does the plan explicitly state what must already be true in `HEAD` or runtime for the phase to work? If a hidden assumption exists, flag it.
+6. **Non-goal discipline** — Are non-goals explicit and credible, or is the plan quietly expanding into adjacent work?
+7. **Ship cut clarity** — Is there a believable minimum shippable subset, or is the plan all-or-nothing?
 
 **Classify findings:**
 - BLOCK: (none — scope issues are concerns, not blocks)
-- CONCERN: mode mismatch, tasks that don't serve the goal, reuse opportunities missed
+- CONCERN: mode mismatch, tasks that don't serve the goal, reuse opportunities missed, hidden prerequisites, weak non-goal boundary, missing or vague ship cut
 - OBSERVATION: alternative approaches, simpler ways to achieve the same goal
 
 **AskUserQuestion checkpoint (conditional):** If a critical scope concern is found (mode mismatch or >2 tasks that don't serve the goal), ask:
@@ -173,17 +183,19 @@ Read the checklist file located alongside this skill at the relative path `refer
 
 ### Step 3: Architecture & Integration
 
-**Gate: Architecture consistency verified before proceeding to Step 4 (or exiting if QUICK).**
+**Gate: Architecture, contracts, and dependency consistency verified before proceeding to Step 4 (or exiting if QUICK).**
 
 1. **Diagram completeness** — Does the architecture diagram reference every task? Are there tasks not represented in the diagram?
 2. **Data flow validation** — Trace the data flow through the diagram. Does data enter, transform, and exit as the tasks describe?
 3. **Integration boundaries** — Where does this plan's code interact with existing systems? Are those boundaries explicitly handled by tasks?
-4. **API contract consistency** — If the plan creates APIs, are the contracts (request/response shapes) consistent between producer and consumer tasks?
-5. **Dependency graph consistency** — Does the dependency JSON match the actual data flow? Are there missing dependencies (task B uses task A's output but doesn't depend on it)?
+4. **Contract completeness** — Does the plan define the important producer/consumer boundaries, or does it rely on vague nouns like "internal update", "initialize", or "graceful degradation"?
+5. **API / data contract consistency** — If the plan creates APIs or internal boundaries, are the contracts (request/response shapes, event payloads, storage semantics) consistent between producer and consumer tasks?
+6. **Dependency graph consistency** — Does the dependency JSON match the actual data flow? Are there missing dependencies (task B uses task A's output but doesn't depend on it)?
+7. **Execution summary consistency** — If the plan includes layers, counts, or a critical path, are they actually derivable from the dependency graph?
 
 **Classify findings:**
-- BLOCK: diagram contradicts task descriptions, dependency JSON has missing critical dependencies
-- CONCERN: tasks not shown in diagram, integration boundaries not explicitly handled, API contract inconsistency between tasks
+- BLOCK: diagram contradicts task descriptions, dependency JSON has missing critical dependencies, markdown/JSON drift that changes the DAG, undefined critical contract on a core boundary
+- CONCERN: tasks not shown in diagram, integration boundaries not explicitly handled, API contract inconsistency between tasks, execution summary drift, vague contract language
 - OBSERVATION: diagram could be clearer, alternative dependency ordering for better parallelism
 
 **QUICK mode exits here.** Skip to Step 7 (Verdict & Report).
@@ -192,7 +204,7 @@ Read the checklist file located alongside this skill at the relative path `refer
 
 ### Step 4: Risk & Recovery (FULL only)
 
-**Gate: Risk coverage validated before proceeding to Step 5.**
+**Gate: Risk coverage and recovery policy validated before proceeding to Step 5.**
 
 1. **Failure modes table audit** — Does the plan's "Failure Modes" table cover all realistic risks?
    - For each task: what happens if this task fails? Is there a mitigation?
@@ -200,10 +212,11 @@ Read the checklist file located alongside this skill at the relative path `refer
 2. **Recovery patterns** — For each failure mode, is the mitigation actionable? "Be careful" is not a mitigation.
 3. **Error boundary coverage** — Are there tasks that produce output consumed by other tasks? What happens if the producing task's output is malformed?
 4. **Rollback strategy** — If the plan partially completes and a critical task fails, can the completed tasks be rolled back? Is this addressed?
+5. **Degraded-mode semantics** — If the plan says errors are skipped, retried, logged, or degraded, does it also define whether the system remains safe to serve?
 
 **Classify findings:**
-- BLOCK: critical risk with no mitigation (e.g., data migration with no rollback), no failure modes table at all
-- CONCERN: incomplete failure modes coverage, vague mitigations, no rollback consideration
+- BLOCK: critical risk with no mitigation (e.g., data migration with no rollback), no failure modes table at all, unsafe degraded mode with no rebuild/health contract
+- CONCERN: incomplete failure modes coverage, vague mitigations, no rollback consideration, retry/skip policy without stale-state semantics
 - OBSERVATION: additional failure modes to consider, improved mitigation strategies
 
 **AskUserQuestion checkpoint (conditional):** If a critical unaddressed risk is found (BLOCK-level), ask:
@@ -227,10 +240,12 @@ Read the checklist file located alongside this skill at the relative path `refer
    - Each task should have at least 1 failure/edge case criterion
    - Flag tasks where all criteria are happy-path only
 4. **Security-sensitive paths** — Are auth, payment, data mutation paths covered by integration tests?
+5. **Public-surface validation** — If the plan promises a user-visible outcome, is there at least one public-surface integration or e2e test that proves it through the real entry point?
+6. **Task validation commands** — If the plan includes per-task validation commands, are they concrete and credible?
 
 **Classify findings:**
 - BLOCK: zero test coverage on a security-sensitive path (auth, payment, data mutation)
-- CONCERN: codepaths missing from coverage map, inappropriate test types, all-happy-path criteria
+- CONCERN: codepaths missing from coverage map, inappropriate test types, all-happy-path criteria, no public-surface validation for promised outcomes, missing or vague task validation commands
 - OBSERVATION: additional edge cases to consider, test strategy improvements
 
 ---
@@ -242,7 +257,7 @@ Read the checklist file located alongside this skill at the relative path `refer
 1. **DAG efficiency** — Calculate the critical path length. Are there unnecessary sequential constraints?
    - Count the longest dependency chain
    - Identify tasks that could be parallelized but are unnecessarily sequenced
-   - Compare: (parallel groups) vs (total tasks) — higher ratio = better parallelism
+   - Compare: (layers) vs (total tasks) — fewer layers with safe independence is better
 2. **Agent matching** — Are agents correctly assigned to tasks?
    - Check each task's `**Agent:**` field against the Agent Table
    - Flag: React task assigned to Python agent, backend task assigned to frontend agent
@@ -254,10 +269,12 @@ Read the checklist file located alongside this skill at the relative path `refer
    - XL: 3+ files or high complexity (should this be split?)
    - Flag: XL tasks that should be decomposed further
 4. **P0 foundation validation** — Do P0 tasks have zero dependencies? Are they truly foundational?
+5. **Write-scope safety** — If multiple tasks are intended to run in parallel, do their write scopes overlap?
+6. **Canonical artifact policy** — Is JSON clearly the source of truth, or is the plan still vulnerable to markdown/JSON drift during execution?
 
 **Classify findings:**
 - BLOCK: (none — execution issues are concerns, not blocks)
-- CONCERN: over-constrained DAG, wrong agent assignment, XL tasks that should be split, P0 with dependencies
+- CONCERN: over-constrained DAG, wrong agent assignment, XL tasks that should be split, P0 with dependencies, overlapping write scopes, non-canonical execution artifacts
 - OBSERVATION: parallelism improvements, alternative agent assignments, effort recalibrations
 
 ---
@@ -332,7 +349,10 @@ Plan: .ulpi/plans/<name>.md | Mode: FULL/QUICK | Tasks: N
 | Building what exists | Plan creates new code for functionality that already exists in the codebase |
 | Diagram inconsistency | Architecture diagram contradicts task descriptions or dependency JSON |
 | Missing critical dependency | Task B uses task A's output but doesn't declare dependency on A |
+| Markdown/JSON drift | Markdown/JSON drift that changes the DAG |
+| Undefined critical contract | Undefined critical contract on a core boundary |
 | Unaddressed critical risk | Critical failure mode with no mitigation (FULL only) |
+| Unsafe degraded mode | Unsafe degraded mode with no rebuild/health contract (FULL only) |
 | Zero test coverage on security path | Auth, payment, or data mutation path with no test coverage (FULL only) |
 
 ### CONCERN (3+ → REVISE)
@@ -342,15 +362,25 @@ Plan: .ulpi/plans/<name>.md | Mode: FULL/QUICK | Tasks: N
 | Mode mismatch | Plan mode doesn't match actual scope |
 | Unnecessary scope | Tasks that don't serve the stated goal |
 | Missed reuse | Existing code could be leveraged but plan builds new |
+| Hidden prerequisites | Plan assumes runtime/codebase state without declaring it |
+| Weak non-goal boundary | Non-goals are absent or plan quietly expands into adjacent work |
+| Missing ship cut | No believable minimum shippable subset defined |
+| Vague contract language | Producer/consumer boundaries use undefined nouns |
+| Execution summary drift | Layers, counts, or critical path don't match the dependency graph |
 | Incomplete failure modes | Realistic risks not covered in failure modes table |
 | Vague mitigations | Failure mode mitigations that aren't actionable |
+| Retry/skip without stale-state semantics | Retry/skip policy without defining stale-state behavior |
 | Test gaps | New codepaths missing from test coverage map |
 | All-happy-path criteria | Task acceptance criteria with no failure/edge cases |
+| No public-surface validation | Promised user-visible outcome lacks entry-point test |
+| Missing/vague validation commands | Per-task validation commands not concrete or credible |
 | Over-constrained DAG | Tasks unnecessarily sequenced, reducing parallelism |
 | Wrong agent assignment | Task assigned to agent outside its domain |
 | XL task not decomposed | Large task that should be split into smaller ones |
 | Effort mismatch | Effort estimate doesn't match task complexity |
 | P0 with dependencies | Foundation task that depends on other tasks |
+| Overlapping write scopes | Parallel tasks write to the same files |
+| Non-canonical execution artifacts | JSON not clearly the source of truth |
 
 ### OBSERVATION (informational)
 

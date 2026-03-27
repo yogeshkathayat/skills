@@ -1,7 +1,7 @@
 ---
 name: plan-to-task-list-with-dag
-version: 1.1.0
-description: Interactive build planner — explores codebase via CodeMap, challenges scope with user, decomposes features into atomic TASK-NNN entries with dependency mapping and priority assignment, produces machine-parseable task plans for parallel agent execution. Use when you need to break a feature, bug fix, or project into a structured DAG of tasks for parallel agent execution.
+version: 1.2.0
+description: Language-agnostic build planner — explores the codebase, challenges scope with the user, identifies prerequisites and contracts, decomposes work into atomic TASK-NNN entries with dependency mapping, and emits canonical JSON + rendered markdown plans for parallel execution. Use when you need a structured task DAG that is safe to execute, not just easy to read.
 ---
 
 <EXTREMELY-IMPORTANT>
@@ -9,25 +9,41 @@ Before generating ANY task plan, you **ABSOLUTELY MUST**:
 
 1. Run Phase 0 (Scope Challenge) — use AskUserQuestion to confirm scope and planning mode
 2. Explore the codebase with CodeMap BEFORE decomposing
-3. Assign an Agent to EVERY task
-4. Save both markdown AND JSON output files
+3. Capture prerequisites, non-goals, and cross-boundary contracts BEFORE tasking
+4. Build one canonical structured plan object, then emit BOTH JSON and markdown from it
+5. Assign an Agent to EVERY task
+6. Save both markdown AND JSON output files
 
 **A plan without scope challenge + mode selection = wasted effort on wrong scope**
+**A plan whose markdown and JSON drift = unsafe execution**
 
 This is not optional. Plans start with user alignment.
 </EXTREMELY-IMPORTANT>
 
 ### Codebase Search — CodeMap First
 
-When you need to find code in this codebase, follow this priority:
+When you need to find code in this codebase, follow this decision tree:
 
-1. **`mcp__codemap__search_code("natural language query")`** — Semantic search. Use for: "where is X handled?", "find Y logic", concept-based search
-2. **`mcp__codemap__search_symbols("functionOrClassName")`** — Symbol search. Use for finding functions, classes, types, interfaces by name
-3. **`mcp__codemap__get_file_summary("path/to/file.ts")`** — File overview before reading
-4. **Glob/Grep** — Only for exact pattern matching (filenames, regex, literal strings)
-5. **Never spawn sub-agents for search** — Use CodeMap directly
+1. **If MCP CodeMap tools are available, use them explicitly in this order:**
+   - `mcp__codemap__search_code("natural language query")` for semantic search
+   - `mcp__codemap__search_symbols("functionOrClassName")` for symbol lookup
+   - `mcp__codemap__get_file_summary("path/to/file")` before reading large files
+2. **Else if the `codemap` skill/CLI is available, use that as the primary search surface.**
+3. **Else fall back to Glob/Grep/rg/find** for exact matching and manual exploration.
+4. **Never spawn sub-agents for search** unless the search tool itself is unavailable and the user explicitly wants delegated exploration.
 
-Start every task by searching CodeMap for relevant code before reading files or exploring.
+Use CodeMap/codemap for:
+- "where is X handled?"
+- "find Y logic"
+- concept-based search
+- symbol lookup before broad text grep
+
+Use Glob/Grep only when:
+- codemap/search tooling is unavailable
+- you need an exact literal/regex verification the semantic tool does not guarantee
+- you are checking whether a known string/path exists after codemap already narrowed the area
+
+Start every task by using the best available code search tool before reading files or exploring. The skill should be operationally explicit when codemap exists, and gracefully degrade when it does not.
 
 ---
 
@@ -73,6 +89,7 @@ Interactive build planner — explores codebases, challenges scope with the user
 - Feature decomposition into atomic, file-scoped tasks
 - Dependency graph analysis and DAG construction
 - Task plan authoring with structured markdown and JSON output
+- Execution-safety planning — prerequisites, contracts, cut lines, validation commands
 - Parallel execution planning and priority assignment
 - Monorepo-aware task scoping across packages
 
@@ -99,17 +116,22 @@ Interactive build planner — explores codebases, challenges scope with the user
 - Use TodoWrite to track progress through the 6 phases
 - Run Phase 0 (Scope Challenge) before any decomposition — use AskUserQuestion to confirm scope and mode
 - Explore the codebase with CodeMap **before** decomposing (never assume structure)
+- Capture **Prerequisites**, **Non-Goals**, and **Contracts** before writing tasks
 - Reference specific file paths found during exploration in task descriptions
 - Include 2-3 testable acceptance criteria for every task (at least 1 must be a failure/edge case)
+- Include at least one public-surface or failure-path validation for every user-visible capability
 - **Assign an `**Agent:**` field to every task** — specifies which subagent type executes it (see Agent Table below)
 - Include `## Task Dependencies` JSON block at end of plan (machine-parsed for DAG scheduling)
 - Validate all task IDs appear as keys in the dependency JSON
+- Treat JSON as the source of truth; render markdown from the same canonical plan object
 - Save plan markdown to `.ulpi/plans/<plan-name>.md` (no `[PLAN]`/`[/PLAN]` markers on disk)
 - **Save structured JSON to `.ulpi/plans/<plan-name>.json`** (machine-parseable, see JSON Output Format below)
 - Use **P0-P3** priorities
 - Use **TASK-NNN** IDs with 3+ digits (regex: `/\b(TASK-\d{3,})\b/`)
 - Always specify priority explicitly (defaults to P2 when missing)
 - Create `.ulpi/plans/` directory if it doesn't exist
+- Distinguish between **local reuse** and **external references** — do not present external research as checked-in leverage
+- Include `filesToModify`, `filesToCreate`, `writeScope`, and `validateCommand` for every task in the JSON
 
 ### Never
 
@@ -120,6 +142,9 @@ Interactive build planner — explores codebases, challenges scope with the user
 - Assume codebase structure without exploring first
 - Manually edit the dependency JSON — generate it programmatically from analysis
 - Create tasks that reference other tasks' output without explicit dependency
+- Hand-maintain counts, layer summaries, or dependency references separately between JSON and markdown
+- Use vague contract language like "internal update", "initialize engines", or "eventually skipped" without defining owner, behavior, and recovery semantics
+- Present external docs, local clones, or web research as local code unless the path exists in the repo
 - Use P1-P4 priorities (this skill uses P0-P3)
 - Include `[PLAN]`/`[/PLAN]` markers when writing to disk (only for in-conversation display)
 
@@ -131,6 +156,8 @@ Interactive build planner — explores codebases, challenges scope with the user
 - File-scoped tasks over feature-scoped tasks
 - Regenerating plan sections over patching partial output
 - Declaring dependency via `**Depends on:** TASK-001` inline format (regex matches `/depends on:|requires:|after:|blocked by:/i`)
+- Adding explicit prerequisite tasks instead of assuming missing runtime support
+- Defining a cut line: what ships if execution stops halfway
 
 ---
 
@@ -149,6 +176,7 @@ Every task MUST have an `**Agent:**` field specifying which subagent type will e
 | `fastapi-senior-engineer` | FastAPI specifically, async DB, JWT auth |
 | `go-senior-engineer` | Go backends, services, APIs |
 | `go-cli-senior-engineer` | Go CLI tools, cobra, viper |
+| `rust-senior-engineer` | Rust systems, storage engines, query layers, CLIs |
 | `ios-macos-senior-engineer` | Swift, SwiftUI, Xcode, SPM, AVFoundation, StoreKit |
 | `expo-react-native-engineer` | Expo, React Native mobile apps |
 | `devops-aws-senior-engineer` | AWS, CDK, CloudFormation, Terraform |
@@ -163,13 +191,14 @@ Pick the agent whose domain best matches the task's technology. If a task spans 
 
 ### PHASE 0: SCOPE CHALLENGE
 
-**Goal:** Before any decomposition, challenge the scope of the request and select a planning mode.
+**Goal:** Before any decomposition, challenge the scope of the request, select a planning mode, and define what must already be true for the plan to work.
 
 ```
 ├── Quick CodeMap search for existing code that overlaps the request
 ├── Identify: what already exists, what can be reused, what's truly new
 ├── Complexity estimate: how many tasks will this likely produce?
 ├── If >10 tasks expected, challenge whether a simpler approach exists
+├── Identify: prerequisites, non-goals, and likely product surface
 ├── Present findings to user via AskUserQuestion
 ├── Ask user to select mode: EXPANSION / HOLD / REDUCTION
 ├── Ask user to select review tool: claude / codex / kiro / all / none
@@ -182,6 +211,8 @@ Pick the agent whose domain best matches the task's technology. If a task spans 
 3. Use `AskUserQuestion` to present:
    - What existing code already partially solves this
    - The minimum set of changes needed
+   - What must already be true in the codebase or runtime for this plan to work
+   - What is explicitly NOT in scope for this phase
    - If >10 tasks expected: "This is a large feature. Consider splitting into phases."
    - Ask user to select planning mode:
 
@@ -207,18 +238,19 @@ Pick the agent whose domain best matches the task's technology. If a task spans 
 
 The user's choice becomes the default `**Review:**` value for all tasks in the plan. Individual tasks can override (e.g., security tasks → `codex` even if default is `claude`).
 
-**Gate:** Do NOT proceed to Phase 1 until the user has confirmed the scope, selected a mode, and chosen a review tool. The selected mode and review tool guide all subsequent phases.
+**Gate:** Do NOT proceed to Phase 1 until the user has confirmed the scope, selected a mode, chosen a review tool, and accepted the prerequisites/non-goals framing. The selected mode and review tool guide all subsequent phases.
 
 ### PHASE 1: EXPLORE
 
-**Goal:** Build a concrete mental model of the codebase before decomposing anything.
+**Goal:** Build a concrete mental model of the codebase, runtime surfaces, and real reuse opportunities before decomposing anything.
 
 ```
 ├── CodeMap search_code for feature-related code
 ├── CodeMap search_symbols for relevant types/functions
-├── Read package.json, config files, directory structure
+├── Read workspace/build/config files for the active ecosystem
 ├── Identify: tech stack, frameworks, conventions, testing patterns
 ├── Find: existing code the feature interacts with
+├── Audit startup/runtime/public-surface paths if the feature is user-visible
 └── Gate: have concrete file paths and patterns to reference
 ```
 
@@ -226,27 +258,45 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 1. `search_code("feature description keywords")` — find related code
 2. `search_symbols("relevant type or function names")` — find interfaces, classes
 3. `get_file_summary("path/to/key/file.ts")` — understand file structure before reading
-4. Read `package.json`, `tsconfig.json`, config files in the relevant packages
-5. Glob for directory structure: `src/**/*.ts`, test patterns, etc.
+4. Read the primary manifests/config files for the relevant ecosystem:
+   - JavaScript/TypeScript: `package.json`, `tsconfig.json`, framework config
+   - Rust: `Cargo.toml`, workspace manifests, feature flags
+   - Python: `pyproject.toml`, `requirements.txt`, app config
+   - Go: `go.mod`, `go.sum`, service config
+   - Other stacks: equivalent build/runtime entry points
+5. Inspect directory structure and test patterns for the touched packages/crates/modules
 
 6. Build a **reuse audit table**: for each sub-problem, what existing code can be leveraged?
+7. Build a **reality audit**:
+   - which paths actually exist locally
+   - which dependencies are external references only
+   - which runtime/public surfaces already work today
+8. Build a **contracts sketch** for each important boundary:
+   - producer
+   - consumer
+   - data shape
+   - consistency/recovery rule
 
 **Gate:** Do NOT proceed to Phase 2 until you have:
 - Concrete file paths for every area the feature touches
 - Understanding of existing patterns (naming, file organization, testing)
 - Knowledge of relevant types/interfaces already defined
 - A reuse audit table (sub-problem → existing code → reuse or build?)
+- A reality audit (local vs external, working vs assumed)
+- A contracts sketch for the key boundaries
 
 ### PHASE 2: DECOMPOSE
 
-**Goal:** Break the feature into atomic TASK-NNN entries.
+**Goal:** Break the feature into atomic TASK-NNN entries with explicit ownership, validation, and execution safety.
 
 ```
 ├── Break feature into atomic TASK-NNN entries
 ├── Each task: one clear deliverable, 1-3 files, self-contained
 ├── Include file paths in every task description
 ├── Add 2-3 testable acceptance criteria per task (≥1 failure/edge case)
+├── Define write scope and validation command per task
 ├── Identify failure modes per task (what can go wrong?)
+├── Identify cut-line vs deferred tasks
 ├── In REDUCTION mode: aggressively prune — only tasks that are strictly necessary
 ├── In EXPANSION mode: include edge cases, docs, and polish tasks
 ├── Follow layer ordering: types → logic → routes → UI → tests
@@ -262,15 +312,17 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 | **Measurable** | Has testable acceptance criteria | "Make it work" | "Returns 200 with token on valid credentials, 401 on invalid" |
 | **Right-sized** | 1-3 files maximum | "Build entire feature" | "Create login form component with email/password fields" |
 | **Self-contained** | Agent can complete without context from other tasks | "Finish what Task 1 started" | "Create user model with fields: id, email, passwordHash, createdAt" |
+| **Verifiable** | Has a concrete validation command | "Test manually" | "`cargo test -p my-crate replay` passes" |
 
 ### PHASE 3: MAP DEPENDENCIES
 
-**Goal:** Declare only truly blocking dependencies to maximize parallelism.
+**Goal:** Declare only truly blocking dependencies to maximize parallelism while preserving safe execution order.
 
 ```
-├── For each task pair, check: file overlap, data flow, API contract, state mutation
+├── For each task pair, check: file overlap, data flow, API contract, state mutation, runtime/bootstrap dependency
 ├── Only declare truly blocking dependencies
 ├── Foundation tasks (P0) should have zero dependencies
+├── Compute execution layers from the DAG
 ├── Verify no circular dependencies
 └── Gate: dependency graph is a valid DAG
 ```
@@ -284,11 +336,12 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 | **API contract** | Frontend needs backend endpoint to exist | Frontend task depends on backend task |
 | **State mutation** | Both modify shared state/config | Sequence them or merge into one task |
 | **Type dependency** | Task B imports types from Task A's output | B depends on A |
+| **Bootstrap dependency** | Task B assumes runtime/startup/public path from A exists | B depends on A |
 | **No overlap** | Independent files, no shared state | No dependency — can run in parallel |
 
 ### PHASE 4: PRIORITIZE
 
-**Goal:** Assign P0-P3 priorities and form parallel execution groups.
+**Goal:** Assign P0-P3 priorities, form parallel execution groups, and define the minimum shippable cut.
 
 ```
 ├── P0: core foundation (blocks others) — types, schemas, configs
@@ -296,6 +349,7 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 ├── P2: supporting work — error handling, validation, edge cases
 ├── P3: nice-to-haves — docs, extra tests, cleanup
 ├── Form parallel groups: same priority + no mutual dependencies
+├── Define the smallest "ship cut" that still delivers the phase goal
 └── Gate: priorities assigned, parallel groups identified
 ```
 
@@ -310,19 +364,22 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 
 **Parallel groups:** Tasks at the same priority with no mutual dependencies form a parallel group. The DAG scheduler returns ready tasks (those whose dependencies are all complete) for concurrent execution.
 
-### PHASE 5: GENERATE
+### PHASE 5: GENERATE & VALIDATE
 
-**Goal:** Produce the final plan and save both markdown and JSON to disk.
+**Goal:** Produce the final plan, lint it for execution safety, and save both markdown and JSON to disk.
 
 ```
-├── Produce plan markdown (no [PLAN]/[/PLAN] markers on disk)
-├── Include: title, overview, architecture diagram, reuse audit, tasks, failure modes, test coverage map, dependencies JSON
+├── Build canonical JSON plan object first
+├── Produce plan markdown from the same canonical plan object (no [PLAN]/[/PLAN] markers on disk)
+├── Include: title, overview, prerequisites, non-goals, contracts, architecture diagram, reuse audit, tasks, failure modes, ship cut, test coverage map, execution summary, dependencies JSON
 ├── Generate ASCII architecture diagram showing component relationships and where each task fits
 ├── Generate test coverage map: new codepath → covering TASK → test type
+├── Generate execution summary from DAG: task count, layer count, layers, critical path
+├── Run final lint checks (see Final Plan Lint below)
 ├── Save markdown to .ulpi/plans/<plan-name>.md
 ├── Save structured JSON to .ulpi/plans/<plan-name>.json (see JSON Output Format)
 ├── Print summary table (ID, title, priority, deps, parallel group)
-└── Gate: Both files saved, markdown valid, JSON valid, all new sections present
+└── Gate: Both files saved, markdown valid, JSON valid, all new sections present, all lint checks pass
 ```
 
 ---
@@ -345,6 +402,23 @@ The plan **must** use this exact structure:
 ## Scope Challenge
 
 <Summary of Phase 0 analysis: what was considered, what was ruled out, why this mode was selected.>
+
+## Prerequisites
+
+- <What must already be true in the current codebase/runtime>
+- <What is external vs local>
+- <What prerequisite task is added if the assumption is not true>
+
+## Non-Goals
+
+- <Explicitly deferred capability 1>
+- <Explicitly deferred capability 2>
+
+## Contracts
+
+| Boundary | Producer | Consumer | Shape / API | Consistency / Recovery Rule |
+|----------|----------|----------|-------------|------------------------------|
+| <contract name> | <component> | <component> | <input/output shape> | <rule> |
 
 ## Architecture
 
@@ -376,6 +450,9 @@ Include specific file paths where the agent should create or modify files.>
 - [ ] <Testable criterion 2>
 - [ ] <Failure/edge case criterion>
 
+**Write Scope:** `path/to/file.ext`, `path/to/other.ext`
+**Validation:** `<command to verify this task>`
+
 **Agent:** <subagent_type>
 **Review:** claude | codex | kiro | none
 
@@ -394,6 +471,9 @@ Include specific file paths where the agent should create or modify files.>
 - [ ] <Criterion 1>
 - [ ] <Criterion 2>
 
+**Write Scope:** `path/to/file.ext`
+**Validation:** `<command to verify this task>`
+
 **Agent:** <subagent_type>
 
 **Depends on:** TASK-001
@@ -410,11 +490,31 @@ Include specific file paths where the agent should create or modify files.>
 |------|---------------|------------|
 | <What can go wrong> | TASK-NNN | <How to prevent or handle it> |
 
+## Ship Cut
+
+- <Minimum subset of tasks that still delivers the promised phase outcome>
+- <What is explicitly not shippable until later layers land>
+
 ## Test Coverage Map
 
 | New Codepath | Covering Task | Test Type |
 |-------------|--------------|-----------|
 | <codepath description> | TASK-NNN | unit / integration / e2e |
+
+## Execution Summary
+
+| Item | Value |
+|------|-------|
+| Task Count | <derived from JSON> |
+| Layer Count | <derived from JSON> |
+| Critical Path | TASK-001 -> TASK-004 -> TASK-007 |
+
+### Parallel Layers
+
+| Layer | Tasks | Notes |
+|------|-------|-------|
+| 0 | TASK-001, TASK-002 | Independent foundation work |
+| 1 | TASK-003 | Depends on TASK-001 |
 
 ## Task Dependencies
 
@@ -441,8 +541,33 @@ In addition to the markdown plan, **always save a companion JSON file** at `.ulp
   "mode": "EXPANSION | HOLD | REDUCTION",
   "overview": "2-4 sentence description of the feature.",
   "scopeChallenge": "Summary of Phase 0 analysis.",
+  "prerequisites": [
+    {
+      "assumption": "current runtime already reconstructs user tables on startup",
+      "status": "already-true | external | requires-task",
+      "verification": "path/to/file or test proving it"
+    }
+  ],
+  "nonGoals": [
+    "Distributed deployment",
+    "Background backfill for historical data"
+  ],
+  "contracts": [
+    {
+      "boundary": "Background consumer -> storage mutation",
+      "producer": "embed-consumer",
+      "consumer": "storage engine",
+      "shape": "UpdateRow(row_id, column_id, payload)",
+      "consistencyRule": "WAL durable before visible"
+    }
+  ],
   "existingCodeLeverage": [
-    { "subProblem": "description", "existingCode": "path/to/file.ts", "action": "reuse | extend | build" }
+    {
+      "subProblem": "description",
+      "existingCode": "path/to/file.ts",
+      "source": "local | external",
+      "action": "reuse | extend | build"
+    }
   ],
   "failureModes": [
     { "risk": "description", "affectedTasks": ["TASK-001"], "mitigation": "how to handle" }
@@ -465,6 +590,9 @@ In addition to the markdown plan, **always save a companion JSON file** at `.ulp
       ],
       "filesToModify": ["path/to/file.ts"],
       "filesToCreate": ["path/to/new-file.ts"],
+      "writeScope": ["path/to/file.ts", "path/to/new-file.ts"],
+      "validateCommand": "npm test -- feature-x",
+      "rollbackPlan": "revert this task's files only",
       "agent": "express-senior-engineer",
       "review": "codex"
     },
@@ -479,10 +607,23 @@ In addition to the markdown plan, **always save a companion JSON file** at `.ulp
       "acceptanceCriteria": ["Criterion 1"],
       "filesToModify": [],
       "filesToCreate": ["path/to/file.ts"],
+      "writeScope": ["path/to/file.ts"],
+      "validateCommand": "npm test -- feature-y",
+      "rollbackPlan": "revert this task's files only",
       "agent": "react-vite-tailwind-engineer",
       "review": "claude"
     }
   ],
+  "executionSummary": {
+    "taskCount": 4,
+    "layerCount": 3,
+    "layers": [
+      { "layer": 0, "tasks": ["TASK-001", "TASK-002"] },
+      { "layer": 1, "tasks": ["TASK-003"] },
+      { "layer": 2, "tasks": ["TASK-004"] }
+    ],
+    "criticalPath": ["TASK-001", "TASK-003", "TASK-004"]
+  },
   "dependencies": {
     "TASK-001": [],
     "TASK-002": ["TASK-001"]
@@ -492,16 +633,40 @@ In addition to the markdown plan, **always save a companion JSON file** at `.ulp
 
 **Rules:**
 - `mode` must be one of `EXPANSION`, `HOLD`, `REDUCTION`
-- `scopeChallenge`, `existingCodeLeverage`, `failureModes`, and `testCoverageMap` are required
+- `scopeChallenge`, `prerequisites`, `nonGoals`, `contracts`, `existingCodeLeverage`, `failureModes`, and `testCoverageMap` are required
 - The `tasks` array must contain every task with all fields populated
 - The `dependencies` object must have every task ID as a key, mapping to its dependency array
 - `filesToModify` and `filesToCreate` contain specific file paths found during exploration
+- `writeScope` contains the files a worker is expected to own for the task
+- `validateCommand` is required and must be runnable or intentionally marked as manual with a reason
 - `agent` is the subagent type that will execute this task (required — see Agent Table)
 - `review` is the post-task review tool: `claude`, `codex`, `kiro`, or `none` (default: `none` for S, `claude` for M+)
 - `type` is one of: `feature`, `bug`, `chore`, `refactor`, `test`, `docs`, `infra`
 - `effort` is one of: `S`, `M`, `L`, `XL`
 - `priority` is one of: `P0`, `P1`, `P2`, `P3`
+- `executionSummary` must be derived from the dependency graph, not typed separately by hand
 - Write valid JSON — use `Write` tool, not `Edit`, to create the file
+
+---
+
+## Final Plan Lint
+
+Do not save or present the plan until all checks pass:
+
+- Every task ID referenced anywhere in markdown exists in the canonical JSON task list
+- Every dependency referenced in markdown matches the canonical JSON dependency graph
+- Task count, layer count, and execution summary are derived from the canonical JSON, not manually maintained
+- Every `filesToModify` path exists
+- Every `filesToCreate` parent directory exists or is created by an earlier task
+- Every local reuse reference exists in the repository; if not, mark it `source: external`
+- Every end-state claim in the overview traces to concrete tasks and prerequisites
+- Every cross-boundary noun in the plan appears in the `Contracts` section
+- Every user-visible capability has at least one public-surface validation task or acceptance criterion
+- Every task has a concrete `validateCommand` or an explicit manual-validation reason
+- If the architecture diagram is not task-complete, label it clearly as component-level only
+- No vague phrases remain without semantics: examples include "internal update", "eventually skipped", "initialized", "graceful degradation", "reasonable performance"
+
+If any check fails, regenerate the plan sections from the canonical structure instead of patching partial text by hand.
 
 ---
 
@@ -575,23 +740,29 @@ Before outputting the final plan, verify ALL of the following:
 - [ ] Phase 0 was completed — user confirmed scope, selected mode, and chose review tool via AskUserQuestion
 - [ ] Mode (EXPANSION/HOLD/REDUCTION) is recorded in plan header and JSON
 - [ ] `## Scope Challenge` section documents what was considered and ruled out
+- [ ] `## Prerequisites`, `## Non-Goals`, and `## Contracts` are present and reflect the exploration findings
 - [ ] `## Architecture` section has an ASCII diagram with TASK-NNN labels
 - [ ] `## Existing Code Leverage` table maps sub-problems to reuse decisions
+- [ ] Local vs external reuse is distinguished correctly
 - [ ] All task IDs are sequential (`TASK-001`, `TASK-002`, ...)
 - [ ] All task IDs appear as keys in the `## Task Dependencies` JSON block
 - [ ] No circular dependencies exist in the dependency graph
 - [ ] Every task has 2-3 testable acceptance criteria (at least 1 failure/edge case)
 - [ ] Every task references specific file paths found during exploration
+- [ ] Every task has `writeScope` and `validateCommand`
 - [ ] Every task has an `**Agent:**` field with a valid subagent type
 - [ ] No task touches more than 3 files
 - [ ] Foundation tasks (P0) have no dependencies (empty arrays in JSON)
 - [ ] Parallel groups have no mutual dependencies
 - [ ] Priorities use P0-P3 (not P1-P4)
+- [ ] Task count, layer count, and execution summary are derived from the dependency graph
 - [ ] `## Failure Modes` table lists risks with affected tasks and mitigations
+- [ ] `## Ship Cut` defines the minimum shippable subset
 - [ ] `## Test Coverage Map` maps every new codepath to a covering task and test type
 - [ ] Plan markdown has no `[PLAN]`/`[/PLAN]` markers
 - [ ] `## Task Dependencies` JSON block is present at the end
 - [ ] Every dependency target exists as a task ID
+- [ ] Every end-state claim in the overview traces to concrete tasks and prerequisites
 - [ ] In REDUCTION mode: no P3 tasks, no docs-only tasks, maximum reuse
 - [ ] In EXPANSION mode: comprehensive test coverage, edge case tasks included
 
@@ -638,6 +809,16 @@ These are excuses. Don't fall for them:
 **Symptom:** Acceptance criteria only test happy path, agents don't handle errors
 **Fix:** At least 1 criterion per task must cover a failure or edge case.
 
+### Failure Mode 6: Markdown / JSON Drift
+
+**Symptom:** Task counts, layers, dependencies, or task references disagree between the two files
+**Fix:** Build canonical JSON first, then render markdown from it. Never hand-patch one without regenerating the other.
+
+### Failure Mode 7: Hidden Prerequisite
+
+**Symptom:** Plan assumes a startup/runtime/public path already exists, but no task or prerequisite covers it
+**Fix:** Add it to `## Prerequisites` if already true, or add a prerequisite task if missing.
+
 ---
 
 ## Quick Workflow Summary
@@ -646,37 +827,42 @@ These are excuses. Don't fall for them:
 PHASE 0: SCOPE CHALLENGE (INTERACTIVE)
 ├── Quick CodeMap scan for existing overlap
 ├── Estimate complexity
+├── Identify prerequisites + non-goals
 ├── AskUserQuestion: present findings + mode selection + review tool selection
-└── Gate: User confirmed scope + mode + review tool
+└── Gate: User confirmed scope + mode + review tool + prerequisites framing
 
 PHASE 1: EXPLORE
 ├── CodeMap search for feature-related code
-├── Read configs and directory structure
-├── Build reuse audit table
-└── Gate: Concrete file paths + reuse audit
+├── Read ecosystem manifests/configs + directory structure
+├── Build reuse audit + reality audit + contracts sketch
+└── Gate: Concrete file paths + reuse audit + contracts
 
 PHASE 2: DECOMPOSE
 ├── Break into atomic TASK-NNN entries
 ├── 2-3 acceptance criteria per task (≥1 failure case)
-├── Identify failure modes per task
+├── Add write scope + validation command
+├── Identify failure modes + cut line
 ├── Mode-aware pruning (REDUCTION/EXPANSION)
-└── Gate: Atomicity checklist + failure modes
+└── Gate: Atomicity checklist + failure modes + validation
 
 PHASE 3: MAP DEPENDENCIES
-├── Check: file overlap, data flow, API contract, state
+├── Check: file overlap, data flow, API contract, state, bootstrap dependency
 ├── Minimize constraints for max parallelism
-└── Gate: Valid DAG, no cycles
+├── Compute execution layers
+└── Gate: Valid DAG, no cycles, layers derived
 
 PHASE 4: PRIORITIZE
 ├── Assign P0-P3
 ├── Form parallel groups
-└── Gate: Priorities + groups
+├── Define ship cut
+└── Gate: Priorities + groups + ship cut
 
-PHASE 5: GENERATE
-├── Markdown with all sections (scope, architecture, reuse, tasks, failures, tests, deps)
-├── JSON companion file
-├── Summary table
-└── Gate: Both files saved, all sections present
+PHASE 5: GENERATE & VALIDATE
+├── Canonical JSON first
+├── Markdown rendered from JSON
+├── Execution summary derived from DAG
+├── Final lint checks
+└── Gate: Both files saved, all sections present, lint passes
 ```
 
 ---
@@ -710,7 +896,7 @@ When plan generation is complete, announce:
 Plan generated.
 
 **Mode:** EXPANSION | HOLD | REDUCTION
-**Tasks:** X total (Y parallel groups)
+**Tasks:** X total (Y layers)
 **Files:** .ulpi/plans/<plan-name>.md + .ulpi/plans/<plan-name>.json
 
 **Execution Summary:**
