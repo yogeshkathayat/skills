@@ -1,6 +1,6 @@
 ---
 name: plan-founder-review
-version: 1.1.0
+version: 1.2.0
 description: |
   Technical founder review of a plan before execution. Reads a plan from .ulpi/plans/<name>.md,
   verifies file paths exist, checks markdown/JSON consistency, challenges scope and architecture
@@ -143,10 +143,12 @@ For every file path referenced in the plan (both `filesToModify` and `filesToCre
 4. **Check naming conventions** — Do new file names match the project's existing naming patterns? (e.g., kebab-case vs camelCase, `.service.ts` vs `Service.ts`)
 5. **Validate reuse-source honesty** — If the plan claims local reuse, verify the path exists locally. If the input is external research, docs, or a local clone outside the repo, it must not be presented as checked-in leverage.
 6. **Check markdown/JSON path consistency** — Ensure the same files and tasks are represented in both artifacts.
+7. **Check integration-surface ownership** — If tasks create new files under a package/module tree, verify the plan also assigns ownership for the shared wiring file (package root, module index, export barrel, router, registry, manifest, startup hook) or clearly reserves that ownership in a scaffold task.
+8. **Check create-then-modify dependencies** — If a task modifies a file that another task creates, verify the dependency exists explicitly.
 
 **Classify findings:**
 - BLOCK: phantom file path (references a file that doesn't exist as "modify"), building functionality that already exists, markdown/JSON path drift that changes execution meaning
-- CONCERN: parent directory doesn't exist for new file, naming convention mismatch, local-vs-external reuse claim mismatch
+- CONCERN: parent directory doesn't exist for new file, naming convention mismatch, local-vs-external reuse claim mismatch, hidden shared-wiring ownership, create-then-modify dependency missing
 - OBSERVATION: similar code exists that could be extended instead of building new
 
 Read the checklist file located alongside this skill at the relative path `references/review-checklist.md` for detailed check items.
@@ -192,10 +194,12 @@ Read the checklist file located alongside this skill at the relative path `refer
 5. **API / data contract consistency** — If the plan creates APIs or internal boundaries, are the contracts (request/response shapes, event payloads, storage semantics) consistent between producer and consumer tasks?
 6. **Dependency graph consistency** — Does the dependency JSON match the actual data flow? Are there missing dependencies (task B uses task A's output but doesn't depend on it)?
 7. **Execution summary consistency** — If the plan includes layers, counts, or a critical path, are they actually derivable from the dependency graph?
+8. **Export / registration ownership** — If later tasks create new modules/files, does the plan make clear who edits the package root, export barrel, router, registry, or manifest to expose them?
+9. **Capability realism** — If a task claims a method/component can append WAL, persist state, do network I/O, spawn workers, or register itself into runtime startup, does the plan say where that capability comes from (owned field, injected trait, callback, parameter, or bootstrap hook)?
 
 **Classify findings:**
 - BLOCK: diagram contradicts task descriptions, dependency JSON has missing critical dependencies, markdown/JSON drift that changes the DAG, undefined critical contract on a core boundary
-- CONCERN: tasks not shown in diagram, integration boundaries not explicitly handled, API contract inconsistency between tasks, execution summary drift, vague contract language
+- CONCERN: tasks not shown in diagram, integration boundaries not explicitly handled, API contract inconsistency between tasks, execution summary drift, vague contract language, missing export/registration ownership, side-effect contract with no capability source
 - OBSERVATION: diagram could be clearer, alternative dependency ordering for better parallelism
 
 **QUICK mode exits here.** Skip to Step 7 (Verdict & Report).
@@ -271,10 +275,12 @@ Read the checklist file located alongside this skill at the relative path `refer
 4. **P0 foundation validation** — Do P0 tasks have zero dependencies? Are they truly foundational?
 5. **Write-scope safety** — If multiple tasks are intended to run in parallel, do their write scopes overlap?
 6. **Canonical artifact policy** — Is JSON clearly the source of truth, or is the plan still vulnerable to markdown/JSON drift during execution?
+7. **Hidden integration overlap** — Even if write scopes do not overlap on paper, do multiple tasks implicitly need the same shared wiring file (package root, export barrel, router, registry, startup hook)?
+8. **Write-scope honesty** — Does each task's declared write scope include the shared files it must realistically touch, or is the plan hiding integration work in prose only?
 
 **Classify findings:**
 - BLOCK: (none — execution issues are concerns, not blocks)
-- CONCERN: over-constrained DAG, wrong agent assignment, XL tasks that should be split, P0 with dependencies, overlapping write scopes, non-canonical execution artifacts
+- CONCERN: over-constrained DAG, wrong agent assignment, XL tasks that should be split, P0 with dependencies, overlapping write scopes, non-canonical execution artifacts, hidden integration overlap, dishonest write scopes
 - OBSERVATION: parallelism improvements, alternative agent assignments, effort recalibrations
 
 ---
@@ -366,6 +372,8 @@ Plan: .ulpi/plans/<name>.md | Mode: FULL/QUICK | Tasks: N
 | Weak non-goal boundary | Non-goals are absent or plan quietly expands into adjacent work |
 | Missing ship cut | No believable minimum shippable subset defined |
 | Vague contract language | Producer/consumer boundaries use undefined nouns |
+| Missing export/registration ownership | New modules/files have no assigned owner for shared wiring edits |
+| Side-effect without capability source | Task claims persistence/network/registration but doesn't name where it comes from |
 | Execution summary drift | Layers, counts, or critical path don't match the dependency graph |
 | Incomplete failure modes | Realistic risks not covered in failure modes table |
 | Vague mitigations | Failure mode mitigations that aren't actionable |
@@ -380,6 +388,8 @@ Plan: .ulpi/plans/<name>.md | Mode: FULL/QUICK | Tasks: N
 | Effort mismatch | Effort estimate doesn't match task complexity |
 | P0 with dependencies | Foundation task that depends on other tasks |
 | Overlapping write scopes | Parallel tasks write to the same files |
+| Hidden integration overlap | Multiple tasks implicitly need the same shared wiring file |
+| Dishonest write scopes | Declared write scope omits shared files the task must realistically touch |
 | Non-canonical execution artifacts | JSON not clearly the source of truth |
 
 ### OBSERVATION (informational)

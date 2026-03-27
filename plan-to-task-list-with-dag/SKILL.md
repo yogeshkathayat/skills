@@ -1,6 +1,6 @@
 ---
 name: plan-to-task-list-with-dag
-version: 1.2.0
+version: 1.3.0
 description: Language-agnostic build planner — explores the codebase, challenges scope with the user, identifies prerequisites and contracts, decomposes work into atomic TASK-NNN entries with dependency mapping, and emits canonical JSON + rendered markdown plans for parallel execution. Use when you need a structured task DAG that is safe to execute, not just easy to read.
 ---
 
@@ -90,6 +90,8 @@ Interactive build planner — explores codebases, challenges scope with the user
 - Dependency graph analysis and DAG construction
 - Task plan authoring with structured markdown and JSON output
 - Execution-safety planning — prerequisites, contracts, cut lines, validation commands
+- Integration-surface ownership planning — package roots, module index files, export barrels, manifests, registries, startup hooks
+- Capability-contract audits — who owns WAL append, persistence, network I/O, background work, and registration
 - Parallel execution planning and priority assignment
 - Monorepo-aware task scoping across packages
 
@@ -117,9 +119,12 @@ Interactive build planner — explores codebases, challenges scope with the user
 - Run Phase 0 (Scope Challenge) before any decomposition — use AskUserQuestion to confirm scope and mode
 - Explore the codebase with CodeMap **before** decomposing (never assume structure)
 - Capture **Prerequisites**, **Non-Goals**, and **Contracts** before writing tasks
+- Capture shared integration surfaces before writing tasks: package roots, module index files, export barrels, manifests, routers, registries, startup hooks
 - Reference specific file paths found during exploration in task descriptions
 - Include 2-3 testable acceptance criteria for every task (at least 1 must be a failure/edge case)
 - Include at least one public-surface or failure-path validation for every user-visible capability
+- For any task that creates a new file/module, explicitly assign who owns the export/registration/wiring edit
+- For any task that claims persistence, WAL append, network I/O, registration, or background mutation, explicitly state where that capability comes from
 - **Assign an `**Agent:**` field to every task** — specifies which subagent type executes it (see Agent Table below)
 - Include `## Task Dependencies` JSON block at end of plan (machine-parsed for DAG scheduling)
 - Validate all task IDs appear as keys in the dependency JSON
@@ -143,6 +148,8 @@ Interactive build planner — explores codebases, challenges scope with the user
 - Manually edit the dependency JSON — generate it programmatically from analysis
 - Create tasks that reference other tasks' output without explicit dependency
 - Hand-maintain counts, layer summaries, or dependency references separately between JSON and markdown
+- Hide required shared-file edits behind narrow write scopes
+- Let a task claim side effects that require capabilities the task never defines
 - Use vague contract language like "internal update", "initialize engines", or "eventually skipped" without defining owner, behavior, and recovery semantics
 - Present external docs, local clones, or web research as local code unless the path exists in the repo
 - Use P1-P4 priorities (this skill uses P0-P3)
@@ -242,7 +249,7 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 
 ### PHASE 1: EXPLORE
 
-**Goal:** Build a concrete mental model of the codebase, runtime surfaces, and real reuse opportunities before decomposing anything.
+**Goal:** Build a concrete mental model of the codebase, runtime surfaces, integration surfaces, and real reuse opportunities before decomposing anything.
 
 ```
 ├── CodeMap search_code for feature-related code
@@ -251,6 +258,8 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 ├── Identify: tech stack, frameworks, conventions, testing patterns
 ├── Find: existing code the feature interacts with
 ├── Audit startup/runtime/public-surface paths if the feature is user-visible
+├── Identify shared integration surfaces: package roots, module index files, export barrels, manifests, routers, registries, startup hooks
+├── Identify capability owners for critical side effects: WAL append, persistence, network calls, background tasks, registration
 └── Gate: have concrete file paths and patterns to reference
 ```
 
@@ -271,11 +280,19 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
    - which paths actually exist locally
    - which dependencies are external references only
    - which runtime/public surfaces already work today
-8. Build a **contracts sketch** for each important boundary:
+8. Build an **integration surface audit**:
+   - for each planned new file/module, how does it become reachable?
+   - which shared files expose it? (package root, module index, export barrel, router, registry, manifest, startup wiring)
+   - who should own those edits: the scaffold task, the feature task, or a dedicated integration task?
+9. Build a **contracts sketch** for each important boundary:
    - producer
    - consumer
    - data shape
    - consistency/recovery rule
+10. Build a **capability audit** for side-effectful operations:
+   - what operation is claimed? (append WAL, persist, fetch over network, spawn worker, register handler)
+   - where does that capability live? (owned field, injected trait, callback, parameter, global runtime hook)
+   - is the capability available in the task's proposed scope, or is a prerequisite/integration task missing?
 
 **Gate:** Do NOT proceed to Phase 2 until you have:
 - Concrete file paths for every area the feature touches
@@ -283,7 +300,9 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 - Knowledge of relevant types/interfaces already defined
 - A reuse audit table (sub-problem → existing code → reuse or build?)
 - A reality audit (local vs external, working vs assumed)
+- An integration surface audit (how each new file becomes reachable, and who owns the shared wiring edits)
 - A contracts sketch for the key boundaries
+- A capability audit for side-effectful methods and APIs
 
 ### PHASE 2: DECOMPOSE
 
@@ -295,6 +314,8 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 ├── Include file paths in every task description
 ├── Add 2-3 testable acceptance criteria per task (≥1 failure/edge case)
 ├── Define write scope and validation command per task
+├── Assign export/registration ownership for every new file/module
+├── Make capability source explicit for every side-effectful method/API
 ├── Identify failure modes per task (what can go wrong?)
 ├── Identify cut-line vs deferred tasks
 ├── In REDUCTION mode: aggressively prune — only tasks that are strictly necessary
@@ -313,6 +334,27 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 | **Right-sized** | 1-3 files maximum | "Build entire feature" | "Create login form component with email/password fields" |
 | **Self-contained** | Agent can complete without context from other tasks | "Finish what Task 1 started" | "Create user model with fields: id, email, passwordHash, createdAt" |
 | **Verifiable** | Has a concrete validation command | "Test manually" | "`cargo test -p my-crate replay` passes" |
+| **Reachable** | New files/modules have an explicit export or registration owner | "Create `feature/foo.*`" | "Create `feature/foo.*` and wire it through the package root / export barrel, or reserve that edit in the scaffold task" |
+| **Capability-complete** | Side effects name the capability source | "background_update appends to durable storage" | "background_update takes an injected appender/writer" or "the owning service stores the writer as a field" |
+
+**Integration ownership rule:**
+
+- If a task creates a new file under an existing or newly-created package/module tree, the plan must also specify how that file becomes reachable.
+- Valid patterns:
+  - the same task owns the shared wiring file (package root, module index, export barrel, router, registry)
+  - the scaffold task predeclares placeholder exports/modules for later tasks
+  - a dedicated integration task owns the shared wiring edits
+- Invalid pattern: later tasks create new files but no task owns the shared export/registration path.
+
+**Capability realism rule:**
+
+- If a task claims a method or component can append WAL, persist state, do network I/O, spawn background work, or register itself into runtime startup, the task description must state how that capability is obtained:
+  - owned field
+  - injected trait object
+  - callback/closure
+  - explicit method parameter
+  - runtime/bootstrap integration point
+- If the capability source is not explicit, the task is underspecified and must be split or clarified.
 
 ### PHASE 3: MAP DEPENDENCIES
 
@@ -320,6 +362,8 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 
 ```
 ├── For each task pair, check: file overlap, data flow, API contract, state mutation, runtime/bootstrap dependency
+├── Check shared integration-surface overlap: package roots, module index files, export barrels, manifests, routers, registries, startup hooks
+├── Check capability-provider dependency: tasks that consume an appender/registry/runtime hook must depend on the task that creates or wires it
 ├── Only declare truly blocking dependencies
 ├── Foundation tasks (P0) should have zero dependencies
 ├── Compute execution layers from the DAG
@@ -337,6 +381,8 @@ The user's choice becomes the default `**Review:**` value for all tasks in the p
 | **State mutation** | Both modify shared state/config | Sequence them or merge into one task |
 | **Type dependency** | Task B imports types from Task A's output | B depends on A |
 | **Bootstrap dependency** | Task B assumes runtime/startup/public path from A exists | B depends on A |
+| **Integration-surface overlap** | Both need the same package root, module index, export barrel, router, registry, manifest, or startup hook | Sequence them, reserve ownership explicitly, or create an integration task |
+| **Capability provider** | Task B claims side effects using a callback/trait/owned field created by A | B depends on A |
 | **No overlap** | Independent files, no shared state | No dependency — can run in parallel |
 
 ### PHASE 4: PRIORITIZE
@@ -440,7 +486,10 @@ Use box-drawing characters. Label each component with the TASK-NNN that creates/
 ### TASK-001: <Title>
 
 <Description — what to build, where the code goes, what patterns to follow.
-Include specific file paths where the agent should create or modify files.>
+Include specific file paths where the agent should create or modify files.
+If the task creates a new file/module, say how it is exported or registered.
+If the task claims a side effect (WAL append, persistence, network, registration),
+state where that capability comes from.>
 
 **Type:** feature
 **Effort:** M
@@ -645,6 +694,8 @@ In addition to the markdown plan, **always save a companion JSON file** at `.ulp
 - `effort` is one of: `S`, `M`, `L`, `XL`
 - `priority` is one of: `P0`, `P1`, `P2`, `P3`
 - `executionSummary` must be derived from the dependency graph, not typed separately by hand
+- If a task creates files under a package/module tree, `writeScope` must either include the shared export/registration file or the plan must point to the task that owns it
+- If a task claims a side effect, the description must name the capability source (field, trait, callback, parameter, or startup hook)
 - Write valid JSON — use `Write` tool, not `Edit`, to create the file
 
 ---
@@ -658,9 +709,13 @@ Do not save or present the plan until all checks pass:
 - Task count, layer count, and execution summary are derived from the canonical JSON, not manually maintained
 - Every `filesToModify` path exists
 - Every `filesToCreate` parent directory exists or is created by an earlier task
+- If a `filesToModify` path is created by an earlier task, the later task depends on that earlier task
 - Every local reuse reference exists in the repository; if not, mark it `source: external`
 - Every end-state claim in the overview traces to concrete tasks and prerequisites
 - Every cross-boundary noun in the plan appears in the `Contracts` section
+- Every new file/module has an explicit export/registration owner somewhere in the plan
+- No task's `writeScope` hides required shared wiring edits (package root, module index, export barrel, router, registry, manifest, startup hook)
+- Every side-effectful method/API claim names its capability source (owned field, injected trait, callback, parameter, or runtime hook)
 - Every user-visible capability has at least one public-surface validation task or acceptance criterion
 - Every task has a concrete `validateCommand` or an explicit manual-validation reason
 - If the architecture diagram is not task-complete, label it clearly as component-level only
@@ -750,6 +805,9 @@ Before outputting the final plan, verify ALL of the following:
 - [ ] Every task has 2-3 testable acceptance criteria (at least 1 failure/edge case)
 - [ ] Every task references specific file paths found during exploration
 - [ ] Every task has `writeScope` and `validateCommand`
+- [ ] Every new file/module is reachable via an explicit export/registration owner in the plan
+- [ ] Shared integration surfaces (package roots, module index files, export barrels, routers, registries, manifests, startup hooks) have explicit task ownership
+- [ ] Every side-effectful task states where its capability comes from (field, trait, callback, parameter, or runtime hook)
 - [ ] Every task has an `**Agent:**` field with a valid subagent type
 - [ ] No task touches more than 3 files
 - [ ] Foundation tasks (P0) have no dependencies (empty arrays in JSON)
