@@ -85,6 +85,13 @@ The spec can come from:
    browse record start
    ```
 
+   **If the user asks for video recording**, also start video capture alongside command recording:
+   ```bash
+   browse video start
+   browse record start
+   ```
+   Video produces a `.webm` file capturing the actual browser/app visuals — useful for bug reports, demos, and stakeholder reviews. Stop video after the session with `browse video stop`.
+
 2. **For each scenario**, follow this pattern:
 
    **Navigate:**
@@ -148,6 +155,14 @@ browse record start
 # ... execute happy path steps ...
 browse record stop
 browse flow save checkout-happy-path
+
+# With video recording (when user asks for it)
+browse video start
+browse record start
+# ... execute steps ...
+browse record stop
+browse video stop
+browse flow save checkout-with-video
 
 # Scenario group 2: Validation errors
 browse record start
@@ -220,6 +235,9 @@ Or run individually:
 ### Screenshots
 [list of screenshots taken during QA]
 
+### Video (if recorded)
+[path to .webm video file]
+
 ### Verdict
 [PASS / FAIL / PASS WITH ISSUES]
 [Summary of what works, what doesn't, and recommended actions]
@@ -227,7 +245,7 @@ Or run individually:
 
 ## Rules
 
-1. **Always record** — `browse record start` before any testing. Every QA session should produce a regression test.
+1. **Always record** — `browse record start` before any testing. Every QA session should produce a regression test. If the user asks for video, also run `browse video start` before and `browse video stop` after.
 2. **Verify, don't just navigate** — the value of QA is checking outcomes, not clicking around. Use `browse text`, `browse count`, `browse js` to verify.
 3. **Screenshot at every checkpoint** — evidence for the report and useful for debugging failures.
 4. **Test the unhappy path** — edge cases, errors, and boundaries are where bugs hide.
