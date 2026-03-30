@@ -1,20 +1,92 @@
 ---
 name: browse
-version: 3.5.0
+version: 3.7.0
 description: |
-  Fast web browsing and web app testing for AI coding agents via persistent headless Chromium daemon.
-  Browse any URL, read page content, click elements, fill forms, run JavaScript, take screenshots,
-  inspect CSS/DOM, capture console/network logs, and more. Ideal for verifying local dev servers,
-  testing UI changes, and validating web app behavior end-to-end. ~100ms per command after
-  first call. Works with Claude Code, Cursor, Cline, Windsurf, and any agent that can run Bash.
-  No MCP, no Chrome extension — just fast CLI.
+  Fast web browsing, web app testing, and native app automation for AI coding agents.
+  Persistent headless Chromium for web. Android, iOS, and macOS app automation via accessibility APIs.
+  Browse URLs, read content, click elements, fill forms, run JavaScript, take screenshots,
+  automate native apps — all through the same CLI and @ref workflow. ~100ms per command.
+  Auto-installs Android toolchain. Works with Claude Code, Cursor, Cline, Windsurf, and any agent that can run Bash.
 allowed-tools:
   - Bash
   - Read
 
 ---
 
-# browse: Persistent Browser for AI Coding Agents
+# browse: Browser & Native App Automation for AI Agents
+
+## Target Decision — ALWAYS check this first
+
+Before running any browse command, decide the correct target:
+
+| User wants to... | Target | Command pattern |
+|---|---|---|
+| Open a URL, test a website, scrape web content | **Browser** (default) | `browse goto <url>` |
+| Test a local dev server (`localhost`) | **Browser** | `browse goto http://localhost:3000` |
+| Interact with an iOS app (Settings, Safari, custom app) | **iOS Simulator** | `browse --platform ios --app <bundleId> <cmd>` |
+| Interact with an Android app (Settings, Chrome, custom app) | **Android Emulator** | `browse --platform android --app <package> <cmd>` |
+| Interact with a macOS desktop app (System Settings, TextEdit) | **macOS App** | `browse --app <name> <cmd>` |
+| Take a screenshot of a native app | **Native app target** | `browse --platform <p> --app <id> screenshot path.png` |
+| Fill a form in a native app | **Native app target** | `browse --platform <p> --app <id> fill @e3 "value"` |
+
+**Key rules:**
+- **No `--platform` or `--app` flag** → browser target (Chromium). Use `goto` to navigate.
+- **`--app` without `--platform`** → macOS app automation. App must be running.
+- **`--platform ios --app`** → iOS Simulator. Use `browse sim start` first if not running.
+- **`--platform android --app`** → Android Emulator. Use `browse sim start` first if not running.
+- **Native app targets do NOT support**: `goto`, `js`, `eval`, `tabs`, `cookies`, `route`, `har`. These are browser-only.
+- **All targets support**: `snapshot`, `text`, `tap`, `fill`, `type`, `press`, `swipe`, `screenshot`.
+- **If unsure which target to use, ASK the user.** "Should I open this in the browser, or do you want me to use the iOS/Android/macOS app?" Don't guess — wrong target = wasted work.
+
+### Native App Quick Start
+
+```bash
+# iOS — boot simulator, open Settings, interact
+browse sim start --platform ios --app com.apple.Preferences --visible
+browse --platform ios --app com.apple.Preferences snapshot -i
+browse --platform ios --app com.apple.Preferences tap @e3
+
+# Android — boot emulator (auto-installs toolchain), open Settings, interact
+browse sim start --platform android --app com.android.settings --visible
+browse --platform android --app com.android.settings snapshot -i
+browse --platform android --app com.android.settings tap @e3
+
+# macOS — no sim needed, app must be running
+browse --app "System Settings" snapshot -i
+browse --app "System Settings" tap @e5
+
+# Switch app targets (iOS: instant reconfigure, Android: driver restart)
+browse --platform ios --app com.apple.mobilesafari snapshot -i
+browse sim start --platform android --app com.google.android.dialer --visible
+
+# Enable platforms (install dependencies, build drivers — run once)
+browse enable android    # Auto-installs adb, JDK, SDK, emulator, driver
+browse enable ios        # Builds iOS runner (needs Xcode)
+browse enable macos      # Builds browse-ax bridge
+browse enable all        # All platforms
+```
+
+### Common iOS Bundle IDs
+| App | Bundle ID |
+|-----|-----------|
+| Settings | `com.apple.Preferences` |
+| Safari | `com.apple.mobilesafari` |
+| Maps | `com.apple.Maps` |
+| Photos | `com.apple.mobileslideshow` |
+| Calendar | `com.apple.mobilecal` |
+
+### Common Android Package Names
+| App | Package Name |
+|-----|-------------|
+| Settings | `com.android.settings` |
+| Chrome | `com.android.chrome` |
+| Dialer | `com.google.android.dialer` |
+| Messages | `com.google.android.apps.messaging` |
+| Calculator | `com.google.android.calculator` |
+
+---
+
+## Browser Quick Start
 
 Persistent headless Chromium daemon. First call auto-starts the server (~3s).
 Every subsequent call: ~100-200ms. Auto-shuts down after 30 min idle.
@@ -53,6 +125,7 @@ To avoid being prompted on every browse command, tell the user they can pre-allo
 - The browser persists between calls — cookies, tabs, and state carry over.
 - The server auto-starts on first command. No manual setup needed.
 - Use `--session <id>` for parallel agent isolation. Each session gets its own tabs, refs, cookies.
+- Use `--context` for state changes, `--context delta` for ARIA diff with refs, `--context full` for complete snapshot with refs after write commands.
 - Use `--json` for structured output (`{success, data, command}`).
 - Use `--content-boundaries` for prompt injection defense when reading untrusted pages.
 - Use `--allowed-domains domain1,domain2` to restrict navigation to trusted sites.
@@ -126,6 +199,20 @@ browse provider save browserbase <api-key>
 browse --provider browserbase goto https://example.com
 browse provider list
 browse provider delete browserbase
+
+# Native app automation (Android, iOS, macOS)
+browse sim start --platform android --app com.android.settings --visible
+browse sim start --platform ios --app com.apple.Preferences --visible
+browse --platform android --app com.android.settings snapshot -i
+browse --platform ios --app com.apple.Preferences snapshot -i
+browse --app "System Settings" snapshot -i              # macOS
+browse --platform android --app com.android.settings tap @e3
+browse --platform android --app com.android.settings swipe up
+browse --platform android --app com.android.settings press back
+browse --platform ios --app com.apple.mobilesafari type "example.com"
+browse --app TextEdit press "cmd+n"                     # macOS modifier combos
+browse sim stop --platform android
+browse sim stop --platform ios
 ```
 
 ## Command Reference
@@ -172,6 +259,20 @@ browse attrs @e6          Get attributes of ref @e6
 ```
 
 Refs are invalidated on navigation — run `snapshot` again after `goto`.
+
+### Native App Automation
+```
+browse sim start --platform ios|android --app <id> [--visible]  Start simulator/emulator + app
+browse sim stop --platform ios|android                          Stop simulator/emulator
+browse sim status --platform ios|android                        Check runner status
+browse --platform ios --app <bundleId> <command>                Target iOS app
+browse --platform android --app <package> <command>             Target Android app
+browse --app <name> <command>                                   Target macOS app
+```
+
+Supported commands on all app platforms: `snapshot`, `text`, `tap`, `fill`, `type`, `press`, `swipe`, `screenshot`.
+macOS also supports modifier combos: `browse --app TextEdit press "cmd+n"`.
+Android auto-installs adb, Java, SDK, and emulator on first use (macOS via Homebrew).
 
 ### Interaction
 ```
