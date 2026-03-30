@@ -243,14 +243,6 @@ Same workflow, native commands:
 ```bash
 # iOS — from bundle ID (app already installed)
 browse sim start --platform ios --app com.example.myapp --visible
-browse record start
-browse --platform ios --app com.example.myapp snapshot -i
-browse --platform ios --app com.example.myapp tap @e3
-browse --platform ios --app com.example.myapp fill @e5 "test"
-browse --platform ios --app com.example.myapp press return
-browse --platform ios --app com.example.myapp screenshot .browse/sessions/default/ios-test.png
-browse record stop
-browse flow save ios-feature-qa
 
 # iOS — install from .app or .ipa build file
 browse sim start --platform ios --app ./build/MyApp.app --visible
@@ -262,6 +254,12 @@ browse sim start --platform android --app ./app/build/outputs/apk/debug/app-debu
 # Then QA as normal
 browse record start
 browse --platform ios --app com.example.myapp snapshot -i
+browse --platform ios --app com.example.myapp tap @e3
+browse --platform ios --app com.example.myapp fill @e5 "test"
+browse --platform ios --app com.example.myapp press return
+browse --platform ios --app com.example.myapp screenshot .browse/sessions/default/ios-test.png
+browse record stop
+browse flow save ios-feature-qa
 ```
 
 ## Examples
