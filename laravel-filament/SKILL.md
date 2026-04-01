@@ -62,21 +62,24 @@ That establishes the namespace and API changes that commonly break Filament work
 
 ## Step 1: Load only the relevant admin references
 
-Pick the reference files that match the task:
+Use the routing table to pick reference files. Do not bulk-load everything.
 
-- resources
-- forms
-- tables
-- actions
-- filters
-- relationships
-- widgets
-- panels
-- notifications
-- testing
-- infolists
+| Task | Read |
+|------|------|
+| v5 namespace and API changes | `references/namespaces.md` |
+| Creating or editing a Resource (CRUD) | `references/resources.md` |
+| Form fields, sections, layout | `references/forms.md` |
+| Table columns, sorting, searching | `references/tables.md` |
+| Bulk actions, row actions, header actions | `references/actions.md` |
+| Table filters, filter forms | `references/filters.md` |
+| Relation managers, BelongsToMany, HasMany | `references/relationships.md` |
+| Dashboard widgets, stats, charts | `references/widgets.md` |
+| Multi-panel setup, navigation, tenancy | `references/panels.md` |
+| Flash messages, database notifications | `references/notifications.md` |
+| Infolist entries, read-only views | `references/infolists.md` |
+| Testing resources, pages, actions | `references/testing.md` |
 
-Do not bulk-load everything.
+Multiple tasks? Read multiple files.
 
 **Success criteria**: Only the task-relevant Filament conventions are in the active context.
 

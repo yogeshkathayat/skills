@@ -23,14 +23,15 @@ effort: high
 ---
 
 <EXTREMELY-IMPORTANT>
-This skill packages a build artifact and may touch signing/export inputs.
+This skill runs `xcodebuild archive` + `exportArchive` and packages the result into a DMG. It touches code signing, provisioning, and export options.
 
 Non-negotiable rules:
-1. Detect project, scheme, and export inputs before building.
-2. Confirm ambiguous signing or export configuration before writing anything.
-3. Use the helper script that lives inside this skill directory.
-4. Do not auto-create or overwrite `ExportOptions.plist` without approval.
-5. Report the built artifact path and any version bump clearly.
+1. Detect project/workspace, scheme, and team ID before building — never guess signing identity.
+2. If multiple schemes exist, ask the user which one to build.
+3. Do not auto-create or overwrite `ExportOptions.plist` without explicit approval — wrong export options produce unsigned or wrong-distribution builds.
+4. Use the helper script (`helpers/build-dmg.sh`) from the project root. Do not inline xcodebuild commands.
+5. If `xcodegen` is detected (`project.yml` present), run `xcodegen generate` before building.
+6. Report the built DMG path, app version, and signing status clearly.
 </EXTREMELY-IMPORTANT>
 
 # build-dmg
