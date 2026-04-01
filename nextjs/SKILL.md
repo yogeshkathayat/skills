@@ -68,21 +68,30 @@ That establishes the locked decisions for runtime, config, and project-wide Next
 
 ## Step 1: Load only the relevant references
 
-Pick the reference files that match the task:
+Use the routing table to pick reference files that match the task. Do not bulk-load the full reference tree.
 
-- routing and route structure
-- page and layout checklist
-- component anatomy
-- API client pattern
-- server actions
-- caching
-- i18n
-- error handling
-- logging or tracking
-- auth, security, SEO, accessibility
-- unit or e2e testing
+| Task | Read |
+|------|------|
+| Folder layout, file conventions, project structure | `references/folder-structure.md` |
+| Route groups, dynamic routes, parallel/intercepting routes | `references/routing.md` |
+| Creating or editing a page or layout | `references/page-checklist.md` |
+| Component structure, client/server boundaries | `references/component-anatomy.md` |
+| Data fetching, API client, fetch wrappers | `references/api-client-pattern.md` |
+| Server actions, mutations, revalidation | `references/server-actions.md` |
+| Caching, ISR, on-demand revalidation | `references/caching-strategy.md` |
+| Translations, locale routing, message files | `references/i18n-conventions.md` |
+| Error boundaries, error.tsx, not-found.tsx | `references/error-handling.md` |
+| Structured logging, log levels | `references/logging.md` |
+| Analytics, event tracking, consent | `references/tracking.md` |
+| Authentication, middleware, session | `references/auth.md` |
+| Security headers, CSP, CSRF, rate limiting | `references/security.md` |
+| SEO, metadata, Open Graph, sitemap | `references/seo.md` |
+| Accessibility, ARIA, keyboard navigation | `references/accessibility.md` |
+| Unit tests, component tests | `references/testing-unit.md` |
+| E2E tests, Playwright | `references/testing-e2e.md` |
+| Machine-readable output, JSON-LD, structured data | `references/machine-readable.md` |
 
-Do not bulk-load the full reference tree.
+Multiple tasks? Read multiple files. The references are self-contained.
 
 **Success criteria**: The active context only contains the task-relevant Next.js conventions.
 
