@@ -31,6 +31,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [branch-review-before-pr](#branch-review-before-pr) | Structural review — race conditions, trust boundaries |
 | [find-bugs](#find-bugs) | Security audit + bug finding on branch diff |
 | [go-live-audit](#go-live-audit) | Pre-launch audit — multi-agent workflow: gates, dimension finders, adversarial verify, critic |
+| [ship-playbook](#ship-playbook) | Prompt → planned, built, reviewed, audited — chains plan/review/build/audit skills as one looping Workflow |
 | [bugfix](#bugfix) | Fix bugs with red-green workflow — reproducer, root cause, minimal fix, regression tests |
 | [code-simplify](#code-simplify) | Review code for reuse, quality, efficiency |
 | [frontend-design-ui-ux](#frontend-design-ui-ux) | UI/UX design specs and component briefs |
@@ -268,6 +269,18 @@ npx skills add https://github.com/ulpi-io/skills --skill go-live-audit
 **Launch-readiness audit of an entire repo — authored fresh for each project.**
 
 Generates a project-tailored multi-agent audit workflow from a bundled template and runs it via the Workflow tool: build/test/lint/typecheck gates in parallel, one read-only finder per applicable audit dimension (picked from a 20+ dimension catalog — authz, multi-tenancy, injection, data-loss, money-math, concurrency, supply-chain, …), agent-based dedup, adversarial verifiers that try to *refute* every finding (blockers get a code lens + spec lens), and a completeness critic that spawns follow-up finders for uncovered areas. Ends with a GO / NO-GO / GO-WITH-FIXES verdict. Typically 40–80 agents — for a quick branch-diff review use `find-bugs` instead.
+
+---
+
+## ship-playbook
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill ship-playbook
+```
+
+**One feature prompt → planned, built, reviewed, and audited — end to end.**
+
+The delivery capstone: it chains the repo's own skills into a single runnable 14-step Workflow and loops on any findings until the gates are genuinely clean. It asks two questions up front — which second harness cross-reviews (`claude` / `codex` / `kiro` / `none`) and whether to run a go-live audit — then runs: **plan** (`plan-to-task-list-with-dag`, assigning a specialist engineer + reviewer + stack skill per task) → **plan review** (`plan-founder-review`, looped to APPROVE, optionally with a second harness) → **build** (per task across the DAG layers: specialist engineer in an isolated worktree → in-workflow `git merge` → matched `-reviewer` → bounded fix loop) → **implementation review** (native ∥ harness) → **go-live audit** (composes `go-live-audit` inline) → **bounded recursion** that re-plans and re-runs on confirmed findings. On exhaustion it escalates honestly rather than faking a clean verdict. Explicit-user-only; spawns many agents over multiple rounds.
 
 ---
 
