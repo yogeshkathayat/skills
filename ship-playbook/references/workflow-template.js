@@ -61,6 +61,10 @@ const AUDIT_SCRIPT_PATH = CFG.auditScriptPath || null
 // specialist to general-purpose (the skill NOTIFIES the user before setting this).
 const AVAILABLE_AGENTS = Array.isArray(CFG.availableAgents) ? CFG.availableAgents : null
 const ALLOW_GENERAL_FALLBACK = CFG.allowGeneralFallback !== false   // default true: degrade, don't crash
+// Per-task work handoff (independent of the plan/impl cross-review HARNESS): who WRITES each task and
+// who REVIEWS each task — 'native' (the plan's specialist agent), 'codex', or 'kiro'. Default native.
+const BUILD_HARNESS = ['codex', 'kiro'].includes(CFG.buildHarness) ? CFG.buildHarness : 'native'
+const TASK_REVIEW_HARNESS = ['codex', 'kiro'].includes(CFG.taskReviewHarness) ? CFG.taskReviewHarness : 'native'
 let PROMPT = CFG.prompt || 'FILL: the feature request'
 
 // Fail LOUD if inputs never reached the script. Without this, the values above stay at their FILL:
@@ -302,6 +306,26 @@ async function harnessReviewLoop(plan, round) {
   }
 }
 
+// ── build/review handoff: who WRITES & who REVIEWS each task ─────────────────────
+// Independent of the plan/impl cross-review HARNESS. buildHarness / taskReviewHarness each ∈
+// native|codex|kiro. native = the plan's specialist agent (via resolveAgent + missingAgents reporting);
+// codex = the codex plugin agent (write-capable); kiro = the Kiro CLI (the kiro-review skill for review;
+// the Kiro CLI directly for build, with self-implementation fallback if the CLI is absent).
+function buildSpawn(t, brief, label) {
+  if (BUILD_HARNESS === 'codex')
+    return spawnSpecialist(`You MAY edit files to implement this task.\n${brief}`, { label, phase: 'Build', schema: TASK_RESULT, agentType: 'codex:codex-rescue', isolation: 'worktree' })
+  if (BUILD_HARNESS === 'kiro')
+    return spawnSpecialist(`Use the Kiro CLI (\`kiro\`) to implement this task in this worktree; if the Kiro CLI is not available, implement it yourself.\n${brief}`, { label, phase: 'Build', schema: TASK_RESULT, agentType: 'general-purpose', isolation: 'worktree' })
+  return spawnSpecialist(brief, { label, phase: 'Build', schema: TASK_RESULT, agentType: resolveAgent(t.agent), isolation: 'worktree' })
+}
+function taskReviewSpawn(t, brief, label) {
+  if (TASK_REVIEW_HARNESS === 'codex')
+    return spawnSpecialist(`READ-ONLY review — do NOT edit.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'codex:codex-rescue' })
+  if (TASK_REVIEW_HARNESS === 'kiro')
+    return spawnSpecialist(`Use the kiro-review skill (\`/kiro-review\`) to review this task via the Kiro CLI, READ-ONLY; if the Kiro CLI is unavailable, say so and return empty findings — do not substitute a native review.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'general-purpose' })
+  return spawnSpecialist(brief, { label, phase: 'Build', schema: FINDINGS, agentType: resolveAgent(t.reviewer) })
+}
+
 // ── steps 10–11: build across DAG layers, engineer → integrate → reviewer → fix ──
 async function buildPlan(plan, round) {
   const byId = new Map(plan.tasks.map(t => [t.id, t]))
@@ -311,7 +335,7 @@ async function buildPlan(plan, round) {
     const layer = layers[li].map(id => byId.get(id)).filter(Boolean)
     // engineers implement in parallel (isolated worktrees, disjoint write scope), each on a task branch
     const built = await parallel(layer.map(t => () =>
-      spawnSpecialist(engineerBrief(t), { label: `build:${t.id}`, phase: 'Build', schema: TASK_RESULT, agentType: resolveAgent(t.agent), isolation: 'worktree' }).then(r => ({ t, r }))))
+      buildSpawn(t, engineerBrief(t), `build:${t.id}`).then(r => ({ t, r }))))
     // in-workflow git integrate: merge passed task branches onto the working branch (one sequential agent)
     const passedBranches = built.filter(b => b && b.r && b.r.status === 'passed').map(b => branchFor(b.t))
     if (passedBranches.length) await agent(integrateBrief(passedBranches), { label: `integrate:L${li}r${round}`, phase: 'Build', schema: INTEGRATE_RESULT })
@@ -321,7 +345,7 @@ async function buildPlan(plan, round) {
     // initial per-task reviews are READ-ONLY → run them in PARALLEL across the layer
     const passed = built.filter(b => b && b.r && b.r.status === 'passed')
     const reviewed = await parallel(passed.map(b => () =>
-      spawnSpecialist(reviewerBrief(b.t), { label: `review:${b.t.id}`, phase: 'Build', schema: FINDINGS, agentType: resolveAgent(b.t.reviewer) })
+      taskReviewSpawn(b.t, reviewerBrief(b.t), `review:${b.t.id}`)
         .then(r => ({ t: b.t, review: r || { verdict: 'concerns', findings: [] } }))))
     // fix→re-integrate MUST stay SERIAL: each git-merges the shared working branch, so concurrent fix
     // loops would race/conflict on it. The re-review after each integrate sees the updated branch.
@@ -331,9 +355,9 @@ async function buildPlan(plan, round) {
       let fixes = 0
       while (review.verdict === 'blocked' && fixes < MAX_FIX) {
         fixes++
-        await spawnSpecialist(fixBrief(t, review.findings, fixes), { label: `fix:${t.id}#${fixes}`, phase: 'Build', schema: TASK_RESULT, agentType: resolveAgent(t.agent), isolation: 'worktree' })
+        await buildSpawn(t, fixBrief(t, review.findings, fixes), `fix:${t.id}#${fixes}`)
         await agent(integrateBrief([fixBranchFor(t, fixes)]), { label: `reintegrate:${t.id}#${fixes}`, phase: 'Build', schema: INTEGRATE_RESULT })
-        review = await spawnSpecialist(reviewerBrief(t), { label: `review:${t.id}#${fixes}`, phase: 'Build', schema: FINDINGS, agentType: resolveAgent(t.reviewer) }) || { verdict: 'concerns', findings: [] }
+        review = await taskReviewSpawn(t, reviewerBrief(t), `review:${t.id}#${fixes}`) || { verdict: 'concerns', findings: [] }
       }
       log.push({ task: t.id, status: review.verdict === 'blocked' ? 'blocked' : 'passed', fixes, findings: review.findings || [] })
     }

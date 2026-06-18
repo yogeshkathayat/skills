@@ -19,6 +19,22 @@ and **go-live audit** (the whole repo).
 Native claude always runs its side. When `harness != none`, the selected column runs **in
 parallel** with the native side, and the loop continues until BOTH are clean.
 
+## Per-task build & review handoff (separate from the cross-review harness)
+
+The `harness` above is the one-shot cross-review of the plan and the full implementation. Two
+**independent** selectors decide who does the per-task work inside the build loop — `buildHarness`
+(who WRITES each task) and `taskReviewHarness` (who REVIEWS each task), each `native | codex | kiro`:
+
+| Handoff | `native` (default) | `codex` | `kiro` |
+|---|---|---|---|
+| Build (write) — `buildHarness` | the plan's specialist engineer agent (`resolveAgent(t.agent)`, in a worktree) | `codex:codex-rescue` agent (write-capable), worktree, brief allows edits | a `general-purpose` agent driving the **Kiro CLI** to implement; if the CLI is absent it implements directly (there is no kiro-build skill wrapper) |
+| Per-task review — `taskReviewHarness` | the matched `-reviewer` agent (`resolveAgent(t.reviewer)`) | `codex:codex-rescue` agent, READ-ONLY brief | the **`kiro-review`** skill via the Kiro CLI, READ-ONLY; if unavailable it says so and returns empty findings (never substitutes a native review) |
+
+These are wired in `workflow-template.js` (`buildSpawn` / `taskReviewSpawn`). The native path keeps the
+specialist-agent availability handling (`resolveAgent` + `missingAgents` reporting); the codex/kiro
+paths bypass it since the user explicitly chose that harness. Read-only discipline still applies to
+every review lane, whoever runs it.
+
 ## Codex delegation — the plugin
 
 Codex is reached through the **`codex:codex-rescue`** agent (the codex plugin), spawned via the
