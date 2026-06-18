@@ -35,7 +35,12 @@ export const meta = {
 }
 
 // ── config (args first, FILL: fallbacks for direct runs) ────────────────────────
-const CFG = (typeof args === 'object' && args) ? args : {}
+// args should arrive as a real JSON object. If the launcher stringified it (a common tool-call
+// mistake), parse the string too — otherwise CFG silently empties and every value below falls to its
+// FILL: placeholder, producing a fake-clean run that did nothing.
+let CFG = {}
+if (args && typeof args === 'object') CFG = args
+else if (typeof args === 'string' && args.trim()) { try { CFG = JSON.parse(args) } catch { CFG = {} } }
 const ROOT = CFG.root || 'FILL: absolute repo path'
 const WORKING_BRANCH = CFG.workingBranch || 'FILL: branch to build on (e.g. main or a feature branch)'
 const HARNESS = CFG.harness || 'FILL: claude | codex | kiro | none'
@@ -51,6 +56,18 @@ money is BIGINT/string, RLS fail-closed, append-only ActivityLog, route-barrel w
 // the workflow() hook; when unset, it falls back to an inline finder pass.
 const AUDIT_SCRIPT_PATH = CFG.auditScriptPath || null
 let PROMPT = CFG.prompt || 'FILL: the feature request'
+
+// Fail LOUD if inputs never reached the script. Without this, the values above stay at their FILL:
+// placeholders, the plan agent is handed "FILL: the feature request", returns no tasks, and the run
+// reports a fake converged:true. Refuse to start on placeholders rather than emit a false clean.
+const _missing = Object.entries({ ROOT, WORKING_BRANCH, HARNESS, VALIDATE_ALL, PROMPT })
+  .filter(([, v]) => typeof v !== 'string' || v.startsWith('FILL:')).map(([k]) => k)
+if (_missing.length) {
+  throw new Error(`ship-playbook: inputs did not reach the script — ${_missing.join(', ')} still at FILL: placeholder (typeof args="${typeof args}"). Pass args as a real JSON object per the skill's Phase 2 contract, NOT a stringified blob, then relaunch as a FRESH run.`)
+}
+if (!['claude', 'codex', 'kiro', 'none'].includes(HARNESS)) {
+  throw new Error(`ship-playbook: harness="${HARNESS}" is invalid — expected one of claude | codex | kiro | none.`)
+}
 
 const harnessAgentType = HARNESS === 'codex' ? 'codex:codex-rescue' : 'general-purpose'
 // The harness lane's brief prefix. codex routes via its plugin agentType (codex:codex-rescue); kiro
@@ -333,11 +350,13 @@ async function dedupVerify(all, phaseTitle) {
 // ── the playbook: steps 3 → 14, recursing until clean or MAX_ROUNDS ─────────────
 const history = []
 let openRegister = []
+let plannedAnyTasks = false   // guards against returning a fake converged:true when nothing ever ran
 for (let round = 1; round <= MAX_ROUNDS; round++) {
   log(`Round ${round}/${MAX_ROUNDS}`)
   phase('Plan')
   const plan = await agent(planBrief(PROMPT, round), { label: `plan:r${round}`, phase: 'Plan', schema: PLAN })
   if (!plan || !plan.tasks || !plan.tasks.length) { history.push({ round, error: 'planning produced no tasks' }); break }
+  plannedAnyTasks = true
 
   phase('Plan review')
   await nativeReviewLoop(plan, round)                       // steps 4–6
@@ -382,7 +401,10 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
 }
 
 return {
-  converged: openRegister.length === 0,
+  // converged is true ONLY when real work ran AND no findings survived — never on an empty/no-task run.
+  converged: plannedAnyTasks && openRegister.length === 0,
+  ranReal: plannedAnyTasks,
+  aborted: plannedAnyTasks ? undefined : 'no tasks were ever planned — aborted before any build (verify args/PROMPT reached the script)',
   roundsRun: history.length,
   history,
   openRegister,                 // empty = clean; non-empty after MAX_ROUNDS = escalate to the user

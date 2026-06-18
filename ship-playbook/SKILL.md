@@ -115,6 +115,12 @@ Workflow({ scriptPath: ".../references/workflow-template.js",
                    auditScriptPath } })
 ```
 
+**Pass `args` as a real JSON object, NOT a JSON-encoded string.** A stringified blob reaches the
+script as one string, fails its `typeof args === 'object'` check, and every input silently falls to a
+`FILL:` placeholder. The script now hard-THROWS on that (and on a `harness` outside
+`claude|codex|kiro|none`) instead of returning a fake `converged:true`, so a stringified-args launch
+errors loudly — if you hit it, relaunch as a FRESH run (no resume) with `args` as an object.
+
 The Workflow then executes the rest of the playbook, in order, as real phases — there is no step it
 skips:
 
@@ -146,8 +152,12 @@ returns and re-invoke with `{scriptPath}` (and `resumeFromRunId` to reuse cached
 
 Read the Workflow result:
 
-- **`converged: true`** (`openRegister` empty) → DONE. Report the rounds run, the build outcome per
-  task, the review/audit verdicts, and where the plans landed.
+- **First, confirm the run is real — not a false-clean.** If the result has `ranReal: false` (or an
+  `aborted` message), `roundsRun` is 0, or `harness` comes back as a `FILL:` string, the inputs never
+  reached the script. Report that failure and relaunch (fresh run) with `args` as a real JSON object;
+  do NOT treat `converged` as meaningful.
+- **`converged: true`** (real run, `openRegister` empty) → DONE. Report the rounds run, the build
+  outcome per task, the review/audit verdicts, and where the plans landed.
 - **`openRegister` non-empty** (recursion hit `maxRounds`) → STOP and escalate honestly: present the
   remaining BLOCK/CONCERN findings, what each round tried (`history`), and options (raise
   `maxRounds`, hand-fix, accept-with-risk). Never represent this as clean.
