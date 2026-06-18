@@ -261,6 +261,10 @@ what still blocks, with the round budget respected; and the project map is refre
 - Do not build on a protected branch without explicit confirmation of `workingBranch`.
 - Do not launch the build in a non-git folder or an empty repo — the build creates and merges task
   branches, so it requires a git work tree with a committed `workingBranch`.
+- Keep build worktrees from poisoning the gate: the workflow prunes its `.claude/worktrees/` build
+  checkouts (at preflight, after each integrate, and at end), and the integrate validate must never
+  scan `.claude/worktrees/**` or sibling agent dirs. If a run's gate fails on files outside the task's
+  scope, suspect leftover worktrees before suspecting the code.
 
 ## When To Load References
 

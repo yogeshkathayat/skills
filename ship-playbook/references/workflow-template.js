@@ -214,8 +214,21 @@ Implement ONLY this task.`
 function integrateBrief(branches) {
   return `On ${WORKING_BRANCH} in ${ROOT}, integrate these task branches IN ORDER: ${branches.join(', ')}.
 For each: \`git merge --no-edit <branch>\`. If one conflicts: \`git merge --abort\`, record it under
-conflicted[], continue with the rest. After merging, run ${VALIDATE_ALL} once. Report merged[],
-conflicted[], validatePassed. Never force-resolve a conflict.`
+conflicted[], continue with the rest. Never force-resolve a conflict.
+
+AFTER merging, CLEAN UP this workflow's transient build worktrees BEFORE validating — they are full
+checkouts of the repo and will otherwise pollute the validate. For each merged branch: find its
+worktree path via \`git -C ${ROOT} worktree list --porcelain\`, run \`git -C ${ROOT} worktree remove --force <path>\`,
+then \`git -C ${ROOT} branch -D <branch>\`. Finish with \`git -C ${ROOT} worktree prune\`.
+
+THEN run ${VALIDATE_ALL} once. The validate must cover ONLY the project at ${ROOT} — it must NOT scan
+\`.claude/worktrees/**\` or sibling agent dirs (\`.factory\`, \`.gemini\`, \`.opencode\`, \`.trae\`, \`.vibe\`).
+If the configured command would walk them (e.g. \`eslint .\` / \`tsc\` without excludes), restrict it to
+the project sources (add \`--ignore-pattern '.claude/**'\`, exclude in the tsconfig invocation, or scope
+to the changed paths) — leftover/transient worktrees must never fail the gate, and never relax any
+other lint/type rule to make it pass.
+
+Report merged[], conflicted[], validatePassed.`
 }
 function reviewerBrief(t) {
   return `READ-ONLY review of ${t.id} as it now stands on ${WORKING_BRANCH} in ${ROOT}. Inspect its
@@ -316,6 +329,21 @@ async function harnessReviewLoop(plan) {
   }
 }
 
+// ── worktree hygiene: prune dangling build worktrees ────────────────────────────
+// Build agents run with isolation:'worktree', which creates full repo checkouts under
+// .claude/worktrees/. Committed ones are NOT auto-removed and accumulate across runs — and since
+// `tsc`/`eslint .` don't respect .gitignore, the integrate validate walks those sibling checkouts and
+// fails on pollution no matter what the task code does. This cleans this workflow's leftovers (and any
+// prior run's) so the gate measures the code, not stray worktrees.
+const CLEANUP_SCHEMA = { type: 'object', additionalProperties: false, required: ['removed'], properties: { removed: { type: 'integer' }, remaining: { type: 'integer' }, detail: { type: 'string' } } }
+async function cleanupWorktrees(when) {
+  return agent(`Worktree hygiene in ${ROOT} — remove this workflow's transient build worktrees so they can't pollute later validates. READ git state, then:
+1. \`git -C ${ROOT} worktree list --porcelain\` — identify worktrees whose path is under \`.claude/worktrees/\` OR whose branch matches \`wf/build/*\` (these are ship-playbook build worktrees, including prior runs' leftovers). Do NOT touch the main working tree (${ROOT}) or any unrelated worktree.
+2. For each: \`git -C ${ROOT} worktree remove --force <path>\`; then if its branch is \`wf/build/*\` and fully merged or stale, \`git -C ${ROOT} branch -D <branch>\`.
+3. \`git -C ${ROOT} worktree prune\` to clear stale admin entries.
+Never delete non-worktree files and never remove the main checkout. Report removed (count), remaining (worktrees still present), and a short detail.`, { label: `cleanup-worktrees:${when}`, phase: 'Plan', schema: CLEANUP_SCHEMA })
+}
+
 // ── build/review handoff: who WRITES & who REVIEWS each task ─────────────────────
 // Independent of the plan/impl cross-review HARNESS. buildHarness / taskReviewHarness each ∈
 // native|codex|kiro. native = the plan's specialist agent (via resolveAgent + missingAgents reporting);
@@ -405,6 +433,8 @@ if (!pre || pre.isGitRepo !== true) {
 if (pre.workingBranchExists === false) {
   return { converged: false, ranReal: false, aborted: `ROOT is a git repo but WORKING_BRANCH "${WORKING_BRANCH}" has no commit to branch from (current branch: ${pre.currentBranch || 'unknown'}). The build needs a committed base — make a baseline commit on "${WORKING_BRANCH}" (or set workingBranch to an existing committed branch), then relaunch.`, harness: HARNESS, goLive: GO_LIVE }
 }
+// Clear dangling build worktrees from prior runs BEFORE building, so the integrate validate starts clean.
+await cleanupWorktrees('preflight')
 
 // ── the playbook: ONE pass — plan → plan review → build → impl review → audit → return findings ──
 // NO automatic recursion. The verified findings are RETURNED as feedback; the skill presents them and
@@ -454,6 +484,9 @@ if (openRegister.length === 0 && GO_LIVE) {                // step 13 — only w
   const auditFindings = (await parallel(lanes)).filter(Boolean).flat()
   openRegister = await dedupVerify(auditFindings.map(f => ({ ...f, phase: 'audit' })), 'Verify')
 }
+
+// Remove this run's build worktrees so they don't pollute the next run (or the user's own tooling).
+await cleanupWorktrees('final')
 
 return {
   // converged = real work ran AND no verified findings survived. Otherwise openRegister IS the feedback

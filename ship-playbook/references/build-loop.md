@@ -116,10 +116,15 @@ blocked rather than merging broken work.
 
 ### 4. Merge the layer
 
-Once every task in the layer passes, fold each worktree back onto the working branch. Re-run the
-affected `validateCommand`(s) on the merged tree to catch integration breakage before the next
-layer. If a merge conflicts (two tasks touched the same surface despite the disjoint check),
-resolve intentionally or escalate — never auto-squash over a conflict.
+Once every task in the layer passes, fold each worktree back onto the working branch. **Then remove the
+merged build worktrees and `git worktree prune` BEFORE re-running the validate** — build agents run with
+`isolation: 'worktree'`, which leaves full repo checkouts under `.claude/worktrees/`; because `tsc` and
+`eslint .` don't respect `.gitignore`, a leftover worktree gets walked by the validate and fails the
+gate on pollution no matter what the task code does. Re-run the affected `validateCommand`(s) on the
+cleaned tree, scoped so it never scans `.claude/worktrees/**` (or sibling agent dirs `.factory`,
+`.gemini`, `.opencode`, `.trae`, `.vibe`). If a merge conflicts (two tasks touched the same surface
+despite the disjoint check), resolve intentionally or escalate — never auto-squash over a conflict.
+(The workflow also prunes dangling worktrees at preflight and at the end of the run.)
 
 ## Task-exit gate
 
