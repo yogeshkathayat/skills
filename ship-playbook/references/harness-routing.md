@@ -12,12 +12,13 @@ and **go-live audit** (the whole repo).
 
 | Surface | `claude` (native, always runs) | `codex` | `kiro` | `none` |
 |---|---|---|---|---|
-| Plan review (Phase C/D) | `plan-founder-review <plan>` (forked) | `codex:codex-rescue` agent, read-only founder-review brief | `kiro-review` adapted to the plan files | native only |
-| Code review (Phase F) | `claude-review` over the branch (or a `general-purpose` reviewer in a worktree) | `codex-review` over the branch | `kiro-review` over the branch | native only |
+| Plan review (Phase C) | `plan-founder-review <plan>` (forked) | `codex:codex-rescue` agent, read-only founder-review brief | `kiro-review` adapted to the plan files | native only |
+| Code review (Phase F, impl review) | `claude-review` over the branch (or a `general-purpose` reviewer in a worktree) | `codex-review` over the branch | `kiro-review` over the branch | native only |
 | Go-live audit (Phase G) | `go-live-audit` (multi-agent workflow) | `codex:codex-rescue` agent, read-only launch-audit brief | `kiro-review` whole-repo | native audit only |
 
 Native claude always runs its side. When `harness != none`, the selected column runs **in
-parallel** with the native side, and the loop continues until BOTH are clean.
+parallel** with the native side. Plan review (Phase C) is a bounded loop (exits clean or
+non-converging); impl review and audit run once and their findings are returned as feedback.
 
 ## Per-task build & review handoff (separate from the cross-review harness)
 

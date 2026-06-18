@@ -3,8 +3,9 @@ name: ship-playbook
 version: 1.0.0
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
-  plan, build it task by task, review the build, and optionally audit it for launch — looping on any
-  findings until the gates are clean. It chains the existing skills as one runnable 14-step Workflow:
+  plan, build it task by task, review the build, and optionally audit it for launch — then return the
+  verified findings as feedback (one pass, no autonomous loop; the user decides on any fix round). It
+  chains the existing skills as one runnable Workflow:
   plan-to-task-list-with-dag (plan + assign a specialist agent per task) → plan-founder-review (loop
   to APPROVE) → a specialist engineer/reviewer build across the DAG → a full claude ∥ codex/kiro
   cross-review → go-live-audit. Up front it asks two things — which harness cross-reviews
@@ -40,9 +41,12 @@ when_to_use: |
 
 <EXTREMELY-IMPORTANT>
 This skill drives a long-running, multi-agent delivery Workflow. Non-negotiable rules:
-1. ALL 14 playbook steps run. They are not optional and none is demoted — the Workflow
-   (`references/workflow-template.js`) executes steps 3–14 as real phases; the skill performs steps
-   1, 2, 2.1 (the prompt + the two intake questions) and feeds them in as `args`.
+1. The Workflow runs ONE pass — plan → plan review → build → impl review → (audit) → verify — and
+   RETURNS the verified findings as feedback. It does NOT loop on its own: a Workflow can't ask the
+   user mid-run, and an autonomous fix-loop is what caused multi-hour grinds. When findings remain, the
+   skill (Phase 3) presents them and the USER decides whether to run a fix round. The Workflow executes
+   steps 3–14 as real phases; the skill performs steps 1, 2, 2.1 (the prompt + the intake questions)
+   and feeds them in as `args`.
 2. ALWAYS ask the intake questions first (plan-review harness + go-live audit, plus the optional
    end-of-run project-map refresh). The first two are Workflow inputs, not steps it can skip; the map
    refresh is a Phase-3 action the skill runs after the Workflow returns.
@@ -61,8 +65,9 @@ This skill drives a long-running, multi-agent delivery Workflow. Non-negotiable 
    build loops engineer → reviewer → fix until the task passes. Never wave a gate through.
 6. Codex delegation goes through the codex plugin (`codex:codex-rescue` agentType). Kiro via the
    kiro path. "claude" = native. "none" = skip the external cross-review. (See `harness-routing.md`.)
-7. The step-14 recursion is bounded by `maxRounds` (default 3). On exhaustion, surface the remaining
-   findings honestly — NEVER fake a clean verdict to exit.
+7. There is no autonomous recursion. After one pass, surface the verified findings honestly and let
+   the user choose to run a fix round (re-invoke with the findings as the prompt) — NEVER fake a clean
+   verdict, and never silently loop.
 8. Keep this body focused on launching + reporting the Workflow. Load the build contract, harness
    routing, state machine, and the Workflow script itself from `references/`.
 </EXTREMELY-IMPORTANT>
@@ -72,20 +77,23 @@ This skill drives a long-running, multi-agent delivery Workflow. Non-negotiable 
 ## Inputs
 
 - `$request`: The feature prompt — what to plan, build, review, and ship. May carry overrides like
-  `harness=codex`, `golive=yes`, or `maxRounds=2` to seed intake.
+  `harness=codex` or `golive=yes` to seed intake. For a fix round, pass the prior findings as the prompt.
 
 ## Goal
 
-Turn one prompt into shipped-quality work the same way every time, by running the full 14-step
-playbook as a single runnable Workflow: a grounded DAG plan, a plan that survives founder review
+Turn one prompt into shipped-quality work the same way every time, by running the delivery playbook
+as a single runnable Workflow: a grounded DAG plan, a plan that survives founder review
 (native + an optional second harness, looped to APPROVE), an implementation built task-by-task with a
-specialist engineer/reviewer pair across the DAG layers, a full implementation cross-review, an
-optional go-live audit, and a self-correcting loop that re-plans and re-runs the whole playbook on
-anything those gates surface — until the gates are genuinely clean.
+specialist engineer/reviewer pair across the DAG layers, a full implementation cross-review (the
+plan-vs-implementation gate), and an optional go-live audit — then it RETURNS the verified findings as
+feedback. It runs ONE pass and does not loop on its own; if findings remain, the user decides whether
+to run a fix round.
 
 The 14 steps map to the Workflow phases: **step 3 → Plan · steps 4–9 → Plan review (native ∥ selected
-harness, one bounded loop) · steps 10–11 → Build · step 12 → Impl review · step 13 → Audit · step 14 →
-Recurse**. Steps 1, 2, 2.1 are the prompt and the two questions the skill collects up front.
+harness, one bounded loop) · steps 10–11 → Build · step 12 → Impl review (plan-vs-implementation) ·
+step 14 → Verify (dedup + adversarial verify → feedback) · step 13 → Audit (only if build+impl
+verified-clean)**. Steps 1, 2, 2.1 are the prompt and the questions the skill collects up front. There
+is no automatic recursion — the workflow returns its findings and stops.
 
 ## Phase 1 — Intake (steps 1, 2, 2.1)
 
@@ -166,7 +174,7 @@ Then launch `references/workflow-template.js` via the **Workflow** tool, passing
 
 ```
 Workflow({ scriptPath: ".../references/workflow-template.js",
-           args: { prompt, harness, goLive, root, workingBranch, validate, hardRules, maxRounds,
+           args: { prompt, harness, goLive, root, workingBranch, validate, hardRules,
                    auditScriptPath, availableAgents, allowGeneralFallback,
                    buildHarness, taskReviewHarness } })
 ```
@@ -181,23 +189,22 @@ The Workflow then executes the rest of the playbook, in order, as real phases �
 skips:
 
 - **Plan (step 3)** — a planning agent follows the plan-to-task-list-with-dag methodology unattended
-  (mode auto-selected; EXPANSION-ish round 1, HOLD/REDUCTION on recursion), grounds every path in the
-  real repo, assigns a specialist engineer + `-reviewer` + stack skill to each task, writes
-  `.ulpi/plans/<name>.md`+`.json`, and returns `{tasks, layers}`.
-- **Plan review (steps 4–9)** — ONE bounded loop under a single "Plan review" phase: native founder
-  review (∥ the selected harness when `harness != none`) → fix the plan (JSON-first, re-render MD) →
-  re-review. Exits as soon as no BLOCK/CONCERN remain (OBSERVATIONs never block) OR a fix round stops
-  reducing the blocking count — capped at `MAX_REVIEW` (2) so two reviewers can't grind the plan.
+  (mode auto-selected), grounds every path in the real repo, assigns a specialist engineer +
+  `-reviewer` + stack skill to each task, writes `.ulpi/plans/<name>.md`+`.json`, returns `{tasks, layers}`.
+- **Plan review (steps 4–9)** — ONE bounded loop: native founder review (∥ the selected harness when
+  `harness != none`) → fix the plan (JSON-first, re-render MD) → re-review. Exits as soon as no
+  BLOCK/CONCERN remain (OBSERVATIONs never block) OR a fix round stops reducing the blocking count —
+  capped at `MAX_REVIEW` (2).
 - **Build (steps 10–11)** — walk the DAG layers; per task: engineer (worktree, task branch) →
   in-workflow integrate agent (`git merge` onto the working branch) → reviewer → bounded fix loop
   until it passes; barrier between layers. Engineer/reviewer = the native specialist by default, or
   `codex`/`kiro` per the `buildHarness`/`taskReviewHarness` handoff.
-- **Impl review (step 12)** — full implementation review, native ∥ selected harness.
-- **Audit (step 13)** — if `goLive`, the playbook COMPOSES the proven `go-live-audit` workflow inline
-  via the Workflow `workflow()` hook (`auditScriptPath`) — its gates → finders → dedup → dual-lens
-  verify → critic — in parallel with a selected-harness audit lane; findings fold into the register.
-- **Recurse (step 14)** — dedup + adversarially verify the findings; if any survive and
-  `round < maxRounds`, re-plan them and run the whole playbook again; else stop.
+- **Impl review (step 12)** — full implementation review (plan vs implementation), native ∥ selected harness.
+- **Verify (step 14)** — dedup + adversarially verify the build+impl findings. These become the
+  returned `openRegister` — the feedback. No automatic re-plan/re-build; the workflow returns and stops.
+- **Audit (step 13)** — runs only when build+impl are verified-clean: if `goLive`, COMPOSE the proven
+  `go-live-audit` workflow inline via the `workflow()` hook (`auditScriptPath`) — gates → finders →
+  dedup → dual-lens verify → critic — ∥ a selected-harness audit lane; its findings become `openRegister`.
 
 Watch progress via `/workflows`. To iterate on the script, edit the saved `scriptPath` the tool
 returns and re-invoke with `{scriptPath}` (and `resumeFromRunId` to reuse cached agent results).
@@ -206,24 +213,26 @@ the script re-executes from the top, so omitting `args` empties `CFG` and the sc
 `FILL:` guard. Always include the full `args` object you launched with.
 
 **Success criteria**: The Workflow runs to completion and returns
-`{ converged, roundsRun, history, openRegister }`.
+`{ converged, ranReal, plan, build, openRegister, missingAgents }`.
 
 ## Phase 3 — Report and escalate
 
 Read the Workflow result:
 
 - **First, confirm the run is real — not a false-clean.** If the result has `ranReal: false` (or an
-  `aborted` message), `roundsRun` is 0, or `harness` comes back as a `FILL:` string, the inputs never
-  reached the script. Report that failure and relaunch (fresh run) with `args` as a real JSON object;
-  do NOT treat `converged` as meaningful.
+  `aborted` message) or `harness` comes back as a `FILL:` string, the inputs never reached the script.
+  Report that failure and relaunch (fresh run) with `args` as a real JSON object; do NOT treat
+  `converged` as meaningful.
 - **If `missingAgents` is non-empty**, some tasks ran on `general-purpose` because the assigned
   specialist isn't installed here. Surface the list (which agents, how to install) so the user can
   decide whether to install them and re-run for higher-quality output.
-- **`converged: true`** (real run, `openRegister` empty) → DONE. Report the rounds run, the build
-  outcome per task, the review/audit verdicts, and where the plans landed.
-- **`openRegister` non-empty** (recursion hit `maxRounds`) → STOP and escalate honestly: present the
-  remaining BLOCK/CONCERN findings, what each round tried (`history`), and options (raise
-  `maxRounds`, hand-fix, accept-with-risk). Never represent this as clean.
+- **`converged: true`** (real run, `openRegister` empty) → DONE. Report the build outcome per task,
+  the review/audit verdicts, and where the plan landed.
+- **`openRegister` non-empty** → PRESENT the feedback and let the user decide. List the verified
+  BLOCK/CONCERN findings (file:line, issue, suggested fix, which gate found them). Then offer the next
+  move: **run a fix round** (re-invoke the workflow with the findings as the prompt — same intake),
+  **hand-fix**, or **accept-with-risk**. The workflow does not loop on its own; never represent open
+  findings as clean.
 
 **Then, if the user chose a project-map refresh at intake AND the run was real (`ranReal`, not
 aborted), run it last** — invoke the chosen skill (`map-project` or `map-project-monorepo`) so the
@@ -236,15 +245,18 @@ what still blocks, with the round budget respected; and the project map is refre
 ## Guardrails
 
 - Do not run proactively; this is explicit-user-only (it spawns many agents across rounds).
-- Do not drop or reorder steps — all 14 run; the Workflow owns 3–14, the skill owns 1–2.1.
+- Round 1 runs the full cycle; recursion rounds are a fix loop (decompose → build → impl review) and
+  deliberately skip founder plan review. Do not re-introduce plan review on recursion, and do not skip
+  Impl review on any round — it is the plan-vs-implementation gate. The Workflow owns 3–14, the skill
+  owns 1–2.1.
 - Do not hand-roll the plan — the Workflow's plan phase follows the plan-to-task-list-with-dag
   methodology and assigns a specialist agent per task.
 - The build assigns the closest AVAILABLE specialist per task; fall back to `general-purpose` only with
   the user's consent after notifying them a specialist is missing (never silently). When a stack skill
   is installed, the engineer MUST use it (`/nextjs`, `/laravel`, `/rust`, …).
-- Do not exit a gate with open BLOCK/CONCERN findings, and never fabricate a clean verdict to break
-  the loop.
-- Do not let the recursion run unbounded; honor `maxRounds`.
+- Never fabricate a clean verdict — open BLOCK/CONCERN findings are returned as feedback, not hidden.
+- The workflow runs ONE pass and never loops on its own; a fix round is a deliberate user choice
+  (re-invoke with the findings as the prompt). Do not re-introduce autonomous recursion.
 - Do not pass secrets/tokens into any agent brief; reference by location, redact values.
 - Do not build on a protected branch without explicit confirmation of `workingBranch`.
 - Do not launch the build in a non-git folder or an empty repo — the build creates and merges task
@@ -253,10 +265,10 @@ what still blocks, with the round budget respected; and the project map is refre
 ## When To Load References
 
 - `references/workflow-template.js`
-  The runnable Workflow that executes the entire 14-step playbook (plan → founder-review loops →
-  specialist build across DAG layers with in-workflow git integration → impl review → go-live audit
-  → bounded recursion). Launch it via the Workflow tool with the intake `args`; edit + re-run it to
-  iterate.
+  The runnable Workflow that executes the playbook in one pass (plan → bounded plan review →
+  specialist build across DAG layers with in-workflow git integration → impl review → verify →
+  go-live audit) and returns the verified findings. Launch it via the Workflow tool with the intake
+  `args`; edit + re-run it to iterate.
 - `references/build-loop.md`
   The build CONTRACT the build phase implements: MUST-pick-a-specialist pairing, per-stack skill
   enforcement, DAG layering + git integration, and the task-exit gate.
@@ -264,8 +276,8 @@ what still blocks, with the round budget respected; and the project map is refre
   How `claude` / `codex` / `kiro` / `none` map to concrete invocations (the `codex:codex-rescue`
   plugin, kiro, native) for plan-review, code-review, and go-live-audit.
 - `references/playbook-state.md`
-  The state machine, master TodoWrite shape, finding schema + dedup, convergence rules, and the
-  `maxRounds` recursion budget.
+  The single-pass state machine, master TodoWrite shape, finding schema + dedup, the Verify phase, and
+  the clean-vs-feedback decision (fix rounds are user-driven, not automatic).
 
 ## Output Contract
 

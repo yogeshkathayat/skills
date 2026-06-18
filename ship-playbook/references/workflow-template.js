@@ -1,4 +1,4 @@
-// ship-playbook — the runnable Workflow that executes the WHOLE 14-step playbook.
+// ship-playbook — the runnable Workflow that executes the playbook in ONE forward pass.
 //
 // Every step below is a real workflow phase, in order — there is no "core" subset:
 //   step 3       → plan          (plan-to-task-list-with-dag methodology; assigns specialist agents)
@@ -8,28 +8,29 @@
 //                                 integrate → matched specialist reviewer → fix loop until it passes)
 //   step 12      → impl review   (full implementation review, native ∥ selected harness)
 //   step 13      → audit         (go-live audit, native ∥ selected harness, if GO_LIVE)
-//   step 14      → recurse       (findings → re-plan + re-run the whole playbook, bounded by MAX_ROUNDS)
+//   step 14      → verify        (dedup + adversarially verify findings → RETURN as feedback; no auto-loop)
 //
 // Steps 1, 2, 2.1 (the prompt + the two intake questions) are collected by the SKILL at the front
 // door — a Workflow cannot AskUserQuestion mid-run — and passed in via `args`. They are still part of
 // the playbook; the skill just supplies them as inputs to this script. Everything else runs here.
 //
 // HOW TO USE: the skill launches this with
-//   args = { prompt, harness, goLive, root, workingBranch, validate, hardRules, maxRounds, auditScriptPath }
+//   args = { prompt, harness, goLive, root, workingBranch, validate, hardRules, auditScriptPath,
+//            availableAgents, allowGeneralFallback, buildHarness, taskReviewHarness }
 //   (auditScriptPath is optional — see the comment at its CFG read below.)
 // Or fill the FILL: fallbacks and run directly. Keep `meta` a pure literal or the Workflow tool
 // rejects it. Build agents have Bash, so the in-workflow integrate agent does the git merges.
 
 export const meta = {
   name: 'ship-playbook',
-  description: 'Runs the full 14-step ship playbook: plan → founder-review loops → specialist build across DAG layers → impl review → go-live audit → bounded recursion, into a verified finding register',
+  description: 'Runs the ship playbook in one pass: plan → bounded plan review → specialist build across DAG layers → impl review → verify → go-live audit, returning a verified finding register as feedback',
   phases: [
     { title: 'Plan', detail: 'plan-DAG methodology; assign specialist agents' },
     { title: 'Plan review', detail: 'native ∥ selected harness → fix → re-review (bounded; stops when not improving)' },
     { title: 'Build', detail: 'per task: engineer → git integrate → reviewer → fix' },
     { title: 'Impl review', detail: 'full implementation review, native ∥ harness' },
-    { title: 'Audit', detail: 'go-live audit (compose go-live-audit) ∥ harness' },
-    { title: 'Recurse', detail: 'dedup + dual-lens verify → re-plan or escalate' },
+    { title: 'Verify', detail: 'dedup + dual-lens verify findings → return as feedback' },
+    { title: 'Audit', detail: 'go-live audit (compose go-live-audit) ∥ harness — only if build+impl clean' },
   ],
 }
 
@@ -44,7 +45,6 @@ const ROOT = CFG.root || 'FILL: absolute repo path'
 const WORKING_BRANCH = CFG.workingBranch || 'FILL: branch to build on (e.g. main or a feature branch)'
 const HARNESS = CFG.harness || 'FILL: claude | codex | kiro | none'
 const GO_LIVE = CFG.goLive === true
-const MAX_ROUNDS = CFG.maxRounds || 3        // step 14 recursion budget
 const MAX_REVIEW = 2                          // bounded plan-review iterations (a plan isn't code; non-convergence also early-exits)
 const MAX_FIX = 3                             // bounded per-task engineer↔reviewer fix iterations
 const VALIDATE_ALL = CFG.validate || 'FILL: workspace validate, e.g. pnpm -w exec tsc --noEmit && pnpm lint'
@@ -173,11 +173,9 @@ const VERDICT = { type: 'object', additionalProperties: false, required: ['real'
 const branchFor = (t) => `wf/build/${t.id}`
 const fixBranchFor = (t, n) => `wf/build/${t.id}-fix${n}`
 
-function planBrief(prompt, round) {
-  const mode = round === 1 ? 'pick the mode that fits the request (EXPANSION/HOLD/REDUCTION)'
-    : 'use a HOLD/REDUCTION mode — this is a tight fix-plan for findings from the prior round'
+function planBrief(prompt) {
   return `Follow the plan-to-task-list-with-dag methodology for this request, UNATTENDED (do NOT ask
-the user anything — ${mode}). Request:\n${prompt}\n
+the user anything — pick the mode that fits the request: EXPANSION/HOLD/REDUCTION). Request:\n${prompt}\n
 Ground every path in the real repo at ${ROOT}; never invent files. Decompose into atomic tasks (≤3
 files each). For EVERY task assign an engineer \`agent\` and set \`reviewer\` = that agent name +
 '-reviewer'. ${AVAILABLE_AGENTS ? `Choose \`agent\` ONLY from the agents that exist in THIS environment: ${AVAILABLE_AGENTS.join(', ')}. Pick the closest specialist; if none fits use 'general-purpose'. Set \`reviewer\` to the agent's '-reviewer' ONLY if that exact name is also in that list, otherwise 'general-purpose'. Do NOT invent agent names outside that list.` : `Prefer the closest specialist over general-purpose.`} Set \`stackSkill\` to the slash-skill to enforce for the
@@ -285,16 +283,16 @@ function ingestGoLive(result) {
 }
 
 // ── plan review (native-only path, no harness) — bounded; exits on clean OR non-convergence ─────
-async function nativeReviewLoop(plan, round) {
+async function nativeReviewLoop(plan) {
   let prev = Infinity
   for (let i = 0; i < MAX_REVIEW; i++) {
-    const r = await agent(founderBrief(plan, 'native'), { label: `plan-review:native:r${round}.${i}`, phase: 'Plan review', schema: FINDINGS })
+    const r = await agent(founderBrief(plan, 'native'), { label: `plan-review:native:${i}`, phase: 'Plan review', schema: FINDINGS })
     if (!r) return
     const n = blockingCount(r.findings)
     if (r.verdict === 'approve' || n === 0) return r   // clean — OBSERVATIONs never block
     if (n >= prev) return r                            // not improving → stop churning, proceed to build
     prev = n
-    await agent(planFixBrief(plan, r.findings), { label: `plan-fix:r${round}.${i}`, phase: 'Plan review', schema: FIX_RESULT })
+    await agent(planFixBrief(plan, r.findings), { label: `plan-fix:${i}`, phase: 'Plan review', schema: FIX_RESULT })
   }
 }
 
@@ -302,19 +300,19 @@ async function nativeReviewLoop(plan, round) {
 // Two strong reviewers keep surfacing fresh CONCERNs on a plan, so cap iterations AND stop the moment
 // a fix round fails to REDUCE the blocking count — never grind the plan for non-improving concerns.
 // (OBSERVATIONs never block; only BLOCK/CONCERN count toward looping.)
-async function harnessReviewLoop(plan, round) {
+async function harnessReviewLoop(plan) {
   let prev = Infinity
   for (let i = 0; i < MAX_REVIEW; i++) {
     const both = await parallel([
-      () => agent(founderBrief(plan, 'native'), { label: `plan-review:native:r${round}.${i}`, phase: 'Plan review', schema: FINDINGS }),
-      () => agent(`${harnessRoute}\n${founderBrief(plan, HARNESS)}`, { label: `plan-review:${HARNESS}:r${round}.${i}`, phase: 'Plan review', schema: FINDINGS, agentType: harnessAgentType }),
+      () => agent(founderBrief(plan, 'native'), { label: `plan-review:native:${i}`, phase: 'Plan review', schema: FINDINGS }),
+      () => agent(`${harnessRoute}\n${founderBrief(plan, HARNESS)}`, { label: `plan-review:${HARNESS}:${i}`, phase: 'Plan review', schema: FINDINGS, agentType: harnessAgentType }),
     ])
     const findings = both.flatMap(r => (r && r.findings) ? r.findings : [])
     const n = blockingCount(findings)
     if (n === 0) return                                // both clean
     if (n >= prev) return                              // not improving → stop churning, proceed to build
     prev = n
-    await agent(planFixBrief(plan, findings), { label: `plan-fix:r${round}.${i}`, phase: 'Plan review', schema: FIX_RESULT })
+    await agent(planFixBrief(plan, findings), { label: `plan-fix:${i}`, phase: 'Plan review', schema: FIX_RESULT })
   }
 }
 
@@ -340,7 +338,7 @@ function taskReviewSpawn(t, brief, label) {
 }
 
 // ── steps 10–11: build across DAG layers, engineer → integrate → reviewer → fix ──
-async function buildPlan(plan, round) {
+async function buildPlan(plan) {
   const byId = new Map(plan.tasks.map(t => [t.id, t]))
   const layers = (plan.layers && plan.layers.length) ? plan.layers : [plan.tasks.map(t => t.id)]
   const log = []
@@ -351,7 +349,7 @@ async function buildPlan(plan, round) {
       buildSpawn(t, engineerBrief(t), `build:${t.id}`).then(r => ({ t, r }))))
     // in-workflow git integrate: merge passed task branches onto the working branch (one sequential agent)
     const passedBranches = built.filter(b => b && b.r && b.r.status === 'passed').map(b => branchFor(b.t))
-    if (passedBranches.length) await agent(integrateBrief(passedBranches), { label: `integrate:L${li}r${round}`, phase: 'Build', schema: INTEGRATE_RESULT })
+    if (passedBranches.length) await agent(integrateBrief(passedBranches), { label: `integrate:L${li}`, phase: 'Build', schema: INTEGRATE_RESULT })
     // engineer-failed tasks are blocked outright
     for (const b of built.filter(b => b && (!b.r || b.r.status !== 'passed')))
       log.push({ task: b.t.id, status: 'blocked', reason: 'engineer validate failed', fixes: 0, findings: [] })
@@ -408,72 +406,63 @@ if (pre.workingBranchExists === false) {
   return { converged: false, ranReal: false, aborted: `ROOT is a git repo but WORKING_BRANCH "${WORKING_BRANCH}" has no commit to branch from (current branch: ${pre.currentBranch || 'unknown'}). The build needs a committed base — make a baseline commit on "${WORKING_BRANCH}" (or set workingBranch to an existing committed branch), then relaunch.`, harness: HARNESS, goLive: GO_LIVE }
 }
 
-// ── the playbook: steps 3 → 14, recursing until clean or MAX_ROUNDS ─────────────
-const history = []
-let openRegister = []
-let plannedAnyTasks = false   // guards against returning a fake converged:true when nothing ever ran
-for (let round = 1; round <= MAX_ROUNDS; round++) {
-  log(`Round ${round}/${MAX_ROUNDS}`)
-  phase('Plan')
-  const plan = await agent(planBrief(PROMPT, round), { label: `plan:r${round}`, phase: 'Plan', schema: PLAN })
-  if (!plan || !plan.tasks || !plan.tasks.length) { history.push({ round, error: 'planning produced no tasks' }); break }
-  plannedAnyTasks = true
+// ── the playbook: ONE pass — plan → plan review → build → impl review → audit → return findings ──
+// NO automatic recursion. The verified findings are RETURNED as feedback; the skill presents them and
+// the user decides whether to run a fix round (a Workflow can't AskUserQuestion mid-run, and an
+// autonomous fix-loop is what produced the multi-hour grind). Impl review (step 12) is the
+// plan-vs-implementation gate and is the last work the loop used to recurse on — now it just reports.
+phase('Plan')                                              // step 3
+const plan = await agent(planBrief(PROMPT), { label: 'plan', phase: 'Plan', schema: PLAN })
+if (!plan || !plan.tasks || !plan.tasks.length) {
+  return { converged: false, ranReal: false, aborted: 'no tasks were planned — aborted before any build (verify args/PROMPT reached the script)', harness: HARNESS, goLive: GO_LIVE }
+}
 
-  // Plan review (steps 4–9): ONE bounded loop under a single "Plan review" phase. harnessReviewLoop
-  // runs native ∥ the selected harness; nativeReviewLoop is the no-harness path. Both exit early on
-  // clean OR non-convergence, so two reviewers can't grind the plan for non-improving concerns.
-  phase('Plan review')
-  if (HARNESS === 'none') await nativeReviewLoop(plan, round)
-  else await harnessReviewLoop(plan, round)
+// Plan review (steps 4–9): plan-QUALITY gate (scope, decomposition, phantom paths). ONE bounded loop,
+// native ∥ selected harness; exits on no BLOCK/CONCERN or non-convergence (capped at MAX_REVIEW).
+phase('Plan review')
+if (HARNESS === 'none') await nativeReviewLoop(plan)
+else await harnessReviewLoop(plan)
 
-  phase('Build')
-  const buildLog = await buildPlan(plan, round)            // steps 10–11
+phase('Build')                                             // steps 10–11
+const buildLog = await buildPlan(plan)
 
-  phase('Impl review')
-  const implFindings = await reviewBoth('impl', 'Impl review', implBrief(plan)) // step 12
+phase('Impl review')                                       // step 12 — the plan-vs-implementation gate
+const implFindings = await reviewBoth('impl', 'Impl review', implBrief(plan))
 
-  phase('Recurse')                                          // step 14
-  const blockedBuild = buildLog.filter(b => b.status === 'blocked').flatMap(b =>
-    (b.findings.length ? b.findings : [{ severity: 'BLOCK', file: b.task, issue: `task ${b.task} did not pass after ${b.fixes} fixes` }]).map(f => ({ ...f, source: 'native', phase: 'build' })))
-  // Verify build + impl findings FIRST. The go-live audit (step 13) is the heaviest phase (it composes
-  // the whole go-live-audit), so run it ONLY on a round whose build+impl are otherwise clean — a round
-  // that will recurse on build/impl findings anyway would just throw the audit away. Gate on
-  // VERIFIED-clean (post-dedupVerify), not raw findings, so a round whose findings all get refuted still
-  // gets audited and can converge this round instead of burning an extra one.
-  let open = await dedupVerify([...blockedBuild, ...implFindings.map(f => ({ ...f, phase: 'impl' }))], 'Recurse')
-  if (open.length === 0 && GO_LIVE) {                       // step 13 — only when build+impl are clean
-    phase('Audit')
-    const lanes = []
-    if (AUDIT_SCRIPT_PATH) {
-      lanes.push(async () => ingestGoLive(await workflow({ scriptPath: AUDIT_SCRIPT_PATH }))) // go-live-audit as a sub-workflow
-    } else {
-      lanes.push(async () => await reviewBoth('audit', 'Audit', auditBrief))                  // fallback
-    }
-    if (HARNESS !== 'none') {
-      lanes.push(async () => {
-        const r = await agent(`${harnessRoute}\n${auditBrief}`, { label: `audit:${HARNESS}`, phase: 'Audit', schema: FINDINGS, agentType: harnessAgentType })
-        return (r && r.findings ? r.findings : []).map(f => ({ ...f, source: HARNESS, phase: 'audit' }))
-      })
-    }
-    const auditFindings = (await parallel(lanes)).filter(Boolean).flat()
-    open = await dedupVerify(auditFindings.map(f => ({ ...f, phase: 'audit' })), 'Recurse')
+// Verify (step 14): dedup + adversarially verify the build+impl findings → this is the feedback.
+phase('Verify')
+const blockedBuild = buildLog.filter(b => b.status === 'blocked').flatMap(b =>
+  (b.findings.length ? b.findings : [{ severity: 'BLOCK', file: b.task, issue: `task ${b.task} did not pass after ${b.fixes} fixes` }]).map(f => ({ ...f, source: 'native', phase: 'build' })))
+// The go-live audit (step 13) is the heaviest phase — run it ONLY when build+impl are verified-clean.
+// An implementation with open findings goes straight back to the user as feedback (no point auditing
+// code that still needs fixes).
+let openRegister = await dedupVerify([...blockedBuild, ...implFindings.map(f => ({ ...f, phase: 'impl' }))], 'Verify')
+if (openRegister.length === 0 && GO_LIVE) {                // step 13 — only when build+impl are clean
+  phase('Audit')
+  const lanes = []
+  if (AUDIT_SCRIPT_PATH) {
+    lanes.push(async () => ingestGoLive(await workflow({ scriptPath: AUDIT_SCRIPT_PATH }))) // go-live-audit as a sub-workflow
+  } else {
+    lanes.push(async () => await reviewBoth('audit', 'Audit', auditBrief))                  // fallback
   }
-  history.push({ round, plan: plan.planName, build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes })), openFindings: open.length })
-  openRegister = open
-  if (open.length === 0) break                              // converged
-  if (round === MAX_ROUNDS) break                           // escalate (do not loop further)
-  PROMPT = `Fix these confirmed findings from round ${round} of "${plan.planName}":\n` +
-    open.map(f => `- [${f.severity}] ${f.file}${f.line ? ':' + f.line : ''} — ${f.issue}${f.suggestedFix ? ` (fix: ${f.suggestedFix})` : ''}`).join('\n')
+  if (HARNESS !== 'none') {
+    lanes.push(async () => {
+      const r = await agent(`${harnessRoute}\n${auditBrief}`, { label: `audit:${HARNESS}`, phase: 'Audit', schema: FINDINGS, agentType: harnessAgentType })
+      return (r && r.findings ? r.findings : []).map(f => ({ ...f, source: HARNESS, phase: 'audit' }))
+    })
+  }
+  const auditFindings = (await parallel(lanes)).filter(Boolean).flat()
+  openRegister = await dedupVerify(auditFindings.map(f => ({ ...f, phase: 'audit' })), 'Verify')
 }
 
 return {
-  // converged is true ONLY when real work ran AND no findings survived — never on an empty/no-task run.
-  converged: plannedAnyTasks && openRegister.length === 0,
-  ranReal: plannedAnyTasks,
-  aborted: plannedAnyTasks ? undefined : 'no tasks were ever planned — aborted before any build (verify args/PROMPT reached the script)',
-  roundsRun: history.length,
-  history,
-  openRegister,                 // empty = clean; non-empty after MAX_ROUNDS = escalate to the user
+  // converged = real work ran AND no verified findings survived. Otherwise openRegister IS the feedback
+  // for the user — they decide whether to run a fix round (this workflow does not loop on its own).
+  converged: openRegister.length === 0,
+  ranReal: true,
+  plan: plan.planName,
+  build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes })),
+  openRegister,                 // verified findings = the feedback to show the user
   missingAgents: [...missingAgents],   // specialist agent types the plan wanted that aren't installed here → skill notifies the user
   harness: HARNESS,
   goLive: GO_LIVE,
