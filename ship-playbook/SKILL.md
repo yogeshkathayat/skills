@@ -111,8 +111,17 @@ Before anything else, tell the user what would make this skill do its BEST work,
 and what's missing — with copy-paste install commands. ship-playbook composes other skills and routes
 to specialist agents; the more of these are installed, the better the result.
 
-Detect the project's stack(s), then check (against your available skills and Agent `subagent_type`
-options) what's present vs missing across:
+**How to detect what's installed — use the loaded lists, NOT the disk.** A skill is "present" if it is
+in YOUR available-skills list (the skills you can actually invoke this session); an agent is "present"
+if it is in your Agent tool's `subagent_type` options. Those loaded lists are the source of truth.
+**Do NOT shell out to `find`/`ls` to detect skills or agents** — they're commonly registered as
+*symlinks* into a shared store (e.g. `.claude/skills/map-project → ../../.agents/skills/map-project`),
+so `find -type d` silently misses them and the install root varies; that produces false "missing"
+reports for skills that are clearly installed. Disk/PATH checks are ONLY for external CLIs (`kiro-cli` —
+see below). Sanity check: if your method reports an obviously-present skill (like one you just used) as
+missing, the method is broken — trust the loaded list, not the shell.
+
+Detect the project's stack(s), then check (against those loaded lists) what's present vs missing across:
 
 - **Composed skills** — `plan-to-task-list-with-dag`, `plan-founder-review`, `go-live-audit`,
   `map-project` / `map-project-monorepo`.
