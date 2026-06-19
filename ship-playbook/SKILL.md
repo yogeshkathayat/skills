@@ -133,9 +133,12 @@ Detect the project's stack(s), then check (against those loaded lists) what's pr
 
 - **Composed skills** — `plan-to-task-list-with-dag`, `plan-founder-review`, `go-live-audit`,
   `map-project` / `map-project-monorepo`.
-- **Specialist agents for this stack** — the `*-senior-engineer` + `*-reviewer` pairs the build would
-  assign (e.g. `nextjs-senior-engineer`(+`-reviewer`), `laravel-senior-engineer`, `rust-senior-engineer`,
-  …). Missing ones force `general-purpose`, which is lower quality.
+- **Specialist agents for this stack** — the engineer + reviewer pairs the build would assign. The
+  reviewer name is the FULL engineer name + `-reviewer` (NOT an abbreviation): e.g.
+  `nextjs-senior-engineer` + `nextjs-senior-engineer-reviewer`; `go-senior-engineer` +
+  `go-senior-engineer-reviewer`; `laravel-senior-engineer` + `laravel-senior-engineer-reviewer`. Use the
+  exact registered names — never shorten to `nextjs-reviewer`/`go-reviewer`. Missing ones force
+  `general-purpose`, which is lower quality.
 - **Stack skills** — `/nextjs`, `/laravel`, `/rust`, … for the detected stack.
 - **Optional harness tooling** (only if the user might pick codex/kiro): the **codex** plugin
   (`codex:codex-rescue`); for **kiro**, the CLI plus the `kiro-review` skill (reviewing) and
@@ -157,8 +160,9 @@ ready" section). Each row shows the item, its state, and the action:
   - skills → `npx skills add https://github.com/ulpi-io/skills --skill <name>` (composed skills, stack
     skills, kiro helpers `kiro-review`/`hand-over-to-kiro`; `kiro-cli` itself → its docs link
     <https://kiro.dev/docs/cli>);
-  - agents → `npx agentshq add ulpi-io/agents@<agent-name>` (the stack's `*-senior-engineer` +
-    `*-reviewer` specialists).
+  - agents → `npx agentshq add ulpi-io/agents@<agent-name>`, using the EXACT registered name per row —
+    e.g. `…@nextjs-senior-engineer` and `…@nextjs-senior-engineer-reviewer` (the reviewer is the full
+    engineer name + `-reviewer`, never `…@nextjs-reviewer`).
 
 If a table has no not-ready items, omit it entirely. Then **offer two choices** with `AskUserQuestion`:
 
