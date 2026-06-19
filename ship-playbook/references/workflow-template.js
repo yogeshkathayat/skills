@@ -249,9 +249,13 @@ function reviewerBrief(t) {
 files (${(t.writeScope || []).join(', ')}) and the task diff (e.g. git diff ${WORKING_BRANCH}~1...${WORKING_BRANCH}
 or git log for ${t.id}). Verify EVERY acceptance criterion is truly met, not just claimed:
 ${(t.acceptance || []).join(' | ')}. Check the locked rules (${HARD_RULES}),
-${t.stackSkill ? `that the ${t.stackSkill} rules were followed, ` : ''}no dead wiring, and that
-${t.validate} actually passes. Do NOT edit. verdict 'blocked' if any BLOCK/MAJOR remains, else
-'clean'/'concerns'; classify findings BLOCK/CONCERN/OBSERVATION with file:line.`
+${t.stackSkill ? `that the ${t.stackSkill} rules were followed, ` : ''}and no dead wiring. Do NOT
+execute build/test/validate commands — you are READ-ONLY and a test runner must create temp dirs,
+which EPERMs in this sandbox; the integrate step ALREADY ran "${t.validate}" in a writable worktree
+and it passed, so review STATICALLY against the diff. A check you cannot run in this sandbox is an
+OBSERVATION, NEVER a BLOCK or CONCERN. Do NOT edit. verdict 'blocked' only if a real BLOCK remains,
+else 'clean'/'concerns'; classify findings BLOCK/CONCERN/OBSERVATION with file:line
+(sandbox/environment limits = OBSERVATION).`
 }
 function fixBrief(t, findings, n) {
   return `Fix ${t.id} for these reviewer findings. In THIS isolated worktree, branch off the latest:
@@ -261,11 +265,16 @@ ${t.validate} pass, then commit. Findings: ${JSON.stringify(findings)}. Report s
 }
 const implBrief = (plan) => `Full implementation review of everything built for ${plan.planName} on
 ${WORKING_BRANCH} in ${ROOT}, against the plan and the hard rules (${HARD_RULES}). Read the diff +
-surrounding context, verify each finding before reporting, do NOT edit. verdict + findings
-BLOCK/CONCERN/OBSERVATION with file:line.`
+surrounding context, verify each finding before reporting, do NOT edit. Do NOT execute
+build/test/lint commands — you are READ-ONLY and a test runner must create temp dirs, which EPERMs in
+this sandbox; review STATICALLY. A check you cannot run in this sandbox is an OBSERVATION, NEVER a
+BLOCK or CONCERN. verdict + findings BLOCK/CONCERN/OBSERVATION with file:line.`
 const auditBrief = `READ-ONLY launch-readiness (go-live) audit of ${ROOT}. Check the hard invariants
 (${HARD_RULES}), build/test/lint honesty, secrets (redact values), tenancy/security, dead wiring,
-placeholder/TODO in shipping code. verdict + findings BLOCK/CONCERN/OBSERVATION with file:line + evidence.`
+placeholder/TODO in shipping code. Do NOT execute build/test/lint commands — you are READ-ONLY and a
+test runner must create temp dirs, which EPERMs in this sandbox; review STATICALLY. A check you cannot
+run in this sandbox is an OBSERVATION, NEVER a BLOCK or CONCERN. verdict + findings
+BLOCK/CONCERN/OBSERVATION with file:line + evidence (sandbox/environment limits = OBSERVATION).`
 
 // run a single read-only review by the chosen executor (who ∈ native|codex|kiro), tagging the source.
 async function reviewOnce(who, label, phaseTitle, brief) {
