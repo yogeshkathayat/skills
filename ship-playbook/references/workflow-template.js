@@ -14,11 +14,12 @@
 // the playbook; the skill just supplies them as inputs to this script. Everything else runs here.
 //
 // HOW TO USE: the skill launches this with
-//   args = { prompt, root, workingBranch, validate, hardRules, goLive,
+//   args = { prompt, root, workingBranch, validate, hardRules, goLive,   // execution-order roles:
+//            planHarness,                              // 'native' | 'codex' | 'kiro'  (who WRITES the plan)
+//            planReview,                               // 'skip' | 'native' | 'codex' | 'kiro'  (who REVIEWS the plan)
 //            buildHarness,                             // 'native' | 'codex' | 'kiro'  (who WRITES each task + fixes)
-//            planReview,                               // 'skip' | 'native' | 'codex' | 'kiro'
 //            taskReview,                               // 'skip' | 'native' | 'codex' | 'kiro'  (who REVIEWS each built task)
-//            implReview,                               // 'skip' | 'native' | 'codex' | 'kiro'  (final plan-vs-impl review)
+//            implReview,                               // 'skip' | 'native' | 'codex' | 'kiro'  (impl review after all tasks)
 //            auditScriptPath, availableAgents, allowGeneralFallback }
 //   (auditScriptPath is optional — see the comment at its CFG read below.)
 //   Every role picks its own executor (writer + each reviewer INDEPENDENT — write codex, review kiro is
@@ -61,8 +62,9 @@ const MAX_FIX = 3                             // bounded per-task engineer↔rev
 // Every role chooses its own executor: 'native' (claude / the plan's specialist agent), 'codex', or
 // 'kiro'. There is NO shared global harness — writing and reviewing can use DIFFERENT harnesses
 // (e.g. write codex, review kiro). Review gates additionally allow 'skip' to save tokens.
-const BUILD_HARNESS = ['native', 'codex', 'kiro'].includes(CFG.buildHarness) ? CFG.buildHarness : 'native'   // who WRITES each task (+ fixes)
+const PLAN_HARNESS = ['native', 'codex', 'kiro'].includes(CFG.planHarness) ? CFG.planHarness : 'native'    // who WRITES the plan
 const PLAN_REVIEW = ['skip', 'native', 'codex', 'kiro'].includes(CFG.planReview) ? CFG.planReview : 'native'  // founder review of the plan
+const BUILD_HARNESS = ['native', 'codex', 'kiro'].includes(CFG.buildHarness) ? CFG.buildHarness : 'native'   // who WRITES each task (+ fixes)
 const TASK_REVIEW = ['skip', 'native', 'codex', 'kiro'].includes(CFG.taskReview) ? CFG.taskReview : 'native'  // review of each built task
 const IMPL_REVIEW = ['skip', 'native', 'codex', 'kiro'].includes(CFG.implReview) ? CFG.implReview : 'native'  // final plan-vs-implementation review
 
@@ -440,8 +442,12 @@ await cleanupWorktrees('preflight')
 // the user decides whether to run a fix round (a Workflow can't AskUserQuestion mid-run, and an
 // autonomous fix-loop is what produced the multi-hour grind). Impl review (step 12) is the
 // plan-vs-implementation gate and is the last work the loop used to recurse on — now it just reports.
-phase('Plan')                                              // step 3
-const plan = await agent(planBrief(PROMPT), { label: 'plan', phase: 'Plan', schema: PLAN })
+phase('Plan')                                              // step 3 — writer per PLAN_HARNESS
+const planAgentType = PLAN_HARNESS === 'codex' ? 'codex:codex-rescue' : 'general-purpose'
+const planPrompt = PLAN_HARNESS === 'kiro'
+  ? `Use the Kiro CLI to produce this plan; if it is unavailable, do it yourself.\n${planBrief(PROMPT)}`
+  : planBrief(PROMPT)
+const plan = await agent(planPrompt, { label: `plan:${PLAN_HARNESS}`, phase: 'Plan', schema: PLAN, agentType: planAgentType })
 if (!plan || !plan.tasks || !plan.tasks.length) {
   return { converged: false, ranReal: false, aborted: 'no tasks were planned — aborted before any build (verify args/PROMPT reached the script)', goLive: GO_LIVE }
 }
@@ -495,7 +501,7 @@ return {
   openRegister,                 // verified findings = the feedback to show the user
   missingAgents: [...missingAgents],   // specialist agent types the plan wanted that aren't installed here → skill notifies the user
   // the review/build roles this run used (so the skill can report them honestly and caveat the verdict)
-  reviewConfig: { buildHarness: BUILD_HARNESS, planReview: PLAN_REVIEW, taskReview: TASK_REVIEW, implReview: IMPL_REVIEW },
+  reviewConfig: { planHarness: PLAN_HARNESS, planReview: PLAN_REVIEW, buildHarness: BUILD_HARNESS, taskReview: TASK_REVIEW, implReview: IMPL_REVIEW },
   // TRUE when NOTHING checked the build: no per-task reviewer AND no impl review. converged then means
   // "engineer validates passed", not "reviewed clean" — the skill must caveat this.
   noReviewGate: TASK_REVIEW === 'skip' && IMPL_REVIEW === 'skip',

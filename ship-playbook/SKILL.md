@@ -122,9 +122,18 @@ options) what's present vs missing across:
   (`codex:codex-rescue`); for **kiro**, `kiro-cli` (<https://kiro.dev/docs/cli>) plus the `kiro-review`
   skill (for reviewing) and `hand-over-to-kiro` skill (for building).
 
-Present a short table — **present ✓ / missing ✗** with the install command for each missing item (e.g.
-`npx skills add https://github.com/ulpi-io/skills --skill <name>`; for agents, the source they come
-from; for kiro-cli, the docs link). Then **offer two choices** with `AskUserQuestion`:
+Present **TWO separate tables**, each listing ONLY the MISSING items (do NOT list what's already
+installed), with the **full, copy-paste install command** per row (never an abbreviation):
+
+- **Missing skills** — `npx skills add https://github.com/ulpi-io/skills --skill <name>` (complete
+  command per row). Covers the composed skills, stack skills, and the kiro helper skills
+  (`kiro-review`, `hand-over-to-kiro`). `kiro-cli` itself (if missing) goes here too as a note with its
+  docs link <https://kiro.dev/docs/cli>.
+- **Missing agents** — `npx agentshq add ulpi-io/agents@<agent-name>` (complete command per row).
+  Covers the stack's `*-senior-engineer` + `*-reviewer` specialists.
+
+If a table has no missing items, omit it (or say "all present" in one line). Then **offer two choices**
+with `AskUserQuestion`:
 
 - **Continue now** with what's installed (missing specialists fall back to `general-purpose`; missing
   harness options simply won't be offered).
@@ -136,31 +145,40 @@ Record what's available — it feeds `availableAgents` and constrains which inta
 
 ### Step 2 — The prompt and the gate questions
 
-The prompt is `$request`. Ask the gate questions (in two `AskUserQuestion` calls — up to 4 each), in
-execution order, unless `$request` already pins them. **Every role independently picks its executor**
-(writer and each reviewer are separate — write with codex, review with kiro is fine); reviews also
-allow `skip`. Only offer `codex`/`kiro` for roles whose tooling Step 1 found installed. Defaults are
-LIGHT to control token cost; the user can dial each up to full rigor or down to skip.
+The prompt is `$request`. Ask the SEVEN gate questions (across two `AskUserQuestion` calls — up to 4
+each), in EXECUTION order so they read like the run, unless `$request` already pins them. **Every role
+independently picks its executor** (each write and each review is separate — write with codex, review
+with kiro is fine). Only offer `codex`/`kiro` for roles whose tooling Step 1 found installed. Defaults
+are LIGHT to control token cost; the user can dial each up to full rigor or down to skip.
 
-1. **Code writing** — who WRITES each task (and its fixes): `native` (the plan's specialist engineer
-   agents — default), `codex`, or `kiro`. Passed as `buildHarness`.
-2. **Plan review** — founder review of the plan: `skip`, `native` (default), `codex`, or `kiro`.
-   Passed as `planReview`.
-3. **Per-task review** — who REVIEWS each built task: `skip` (no per-task reviewer or fix loop —
-   biggest token save), `native` (the matched `-reviewer` — default), `codex`, or `kiro`. Passed as
-   `taskReview`.
-4. **Final implementation review** — the plan-vs-implementation review after the build: `skip`,
-   `native` (default), `codex`, or `kiro`. Passed as `implReview`.
-5. **Go-live audit at the end** — `no` (default), or `yes` (runs the go-live audit, only if build+impl
-   come back verified-clean). Passed as `goLive`.
-6. **Refresh the project map at the end** — `no` (default), `map-project`, or `map-project-monorepo`.
-   Detect the repo layout and offer the matching default. Run only in Phase 3 on a real, non-aborted run.
+**Option ordering rule:** list `native` first (mark it Recommended/default), then `codex`, then
+`kiro`, and put **`skip` as the LAST option you provide** (it then renders second-to-last, right before
+the auto-added "Other"). Plan writing and code writing are NOT skippable (they must happen); the four
+optional gates (plan review, code review, impl review, go-live audit, map) each include `skip`.
 
-**Defaults** (light, kept safe): `buildHarness native`, `planReview native`, `taskReview native`,
-`implReview native`, `goLive no`, map `no`. The user can go **full swing** (every review on, codex/kiro
-where wanted, `goLive yes`), **delegate building and reviewing to harnesses** (`buildHarness codex|kiro`
-+ `taskReview`/`implReview` codex|kiro — and the writer and reviewer may be DIFFERENT harnesses), or
-go fast (skip the reviews). **Warn (do not block)** if BOTH `taskReview skip` AND `implReview skip`:
+1. **Who WRITES the plan** — the DAG decomposition: `native` (plan-to-task-list-with-dag — default),
+   `codex`, or `kiro`. Passed as `planHarness`. (No skip — the plan must be written.)
+2. **Who REVIEWS the plan** — founder review (scope, decomposition, phantom paths): `native` (default),
+   `codex`, `kiro`, or `skip`. Passed as `planReview`.
+3. **Who WRITES the code** — every task + its fixes: `native` (the plan's specialist engineer agents —
+   default), `codex`, or `kiro`. Passed as `buildHarness`. (No skip.)
+4. **Who REVIEWS the code** — each built task in the build loop: `native` (the matched `-reviewer` —
+   default), `codex`, `kiro`, or `skip` (no per-task reviewer or fix loop — biggest token save). Passed
+   as `taskReview`.
+5. **Implementation review after all tasks** — the plan-vs-implementation review: `native` (default),
+   `codex`, `kiro`, or `skip`. Passed as `implReview`.
+6. **Run the go-live audit** — `run` (the go-live audit, only fires if build+impl come back
+   verified-clean) or `skip` (default). Passed as `goLive` (run → true).
+7. **Run map-project at the end** — `map-project`, `map-project-monorepo`, or `skip` (default). Detect
+   the repo layout and recommend the matching variant. Held as `mapRefresh` — this is NOT a Workflow arg
+   (it isn't in the `args` object); the SKILL runs the chosen map skill itself in Phase 3, after the
+   Workflow returns, on a real (non-aborted) run.
+
+**Defaults** (light, kept safe): `planHarness native`, `planReview native`, `buildHarness native`,
+`taskReview native`, `implReview native`, `goLive skip`, map `skip`. The user can go **full swing**
+(every review on, codex/kiro where wanted, go-live on), **delegate writing and reviewing to harnesses**
+(any write/review role → codex|kiro — and the writer and reviewer may be DIFFERENT harnesses), or go
+fast (skip the reviews). **Warn (do not block)** if BOTH `taskReview skip` AND `implReview skip`:
 nothing then checks the build, so a clean verdict only means the engineer validates passed.
 
 ### Step 3 — Project facts, git preflight, agent list
@@ -182,10 +200,10 @@ returns `missingAgents` for anything that still slips through. Never silently su
 
 Open a master `TodoWrite` mirroring the phases in `references/playbook-state.md`.
 
-**Success criteria**: dependency status was shown and the user chose continue-or-restart; `buildHarness`,
-`planReview`, `taskReview`, `implReview`, `goLive`, `mapRefresh`, `root` (a confirmed git work tree),
-`workingBranch`, `validate`, `hardRules`, and `availableAgents` (+ `allowGeneralFallback` if gaps) are
-all resolved.
+**Success criteria**: dependency status was shown and the user chose continue-or-restart;
+`planHarness`, `planReview`, `buildHarness`, `taskReview`, `implReview`, `goLive`, `mapRefresh`, `root`
+(a confirmed git work tree), `workingBranch`, `validate`, `hardRules`, and `availableAgents`
+(+ `allowGeneralFallback` if gaps) are all resolved.
 
 ## Phase 2 — Run the playbook Workflow (steps 3–14)
 
@@ -199,9 +217,13 @@ Then launch `references/workflow-template.js` via the **Workflow** tool, passing
 ```
 Workflow({ scriptPath: ".../references/workflow-template.js",
            args: { prompt, root, workingBranch, validate, hardRules, goLive,
-                   buildHarness, planReview, taskReview, implReview,
+                   planHarness, planReview, buildHarness, taskReview, implReview,
                    auditScriptPath, availableAgents, allowGeneralFallback } })
 ```
+
+`mapRefresh` is deliberately NOT in `args` — it's the only intake answer the Workflow doesn't run.
+The map refresh regenerates `CLAUDE.md` from the FINISHED code, so the skill runs it itself in Phase 3
+after the Workflow returns (see Q7). All other gate answers go in `args` above.
 
 **Pass `args` as a real JSON object, NOT a JSON-encoded string.** A stringified blob reaches the
 script as one string, fails its `typeof args === 'object'` check, and every input silently falls to a
@@ -211,9 +233,10 @@ as an object. (Each role arg coerces to a safe default if invalid, so a typo deg
 
 The Workflow then executes the playbook in one pass, running each gate at the level the user chose:
 
-- **Plan (step 3)** — a planning agent follows the plan-to-task-list-with-dag methodology unattended
-  (mode auto-selected), grounds every path in the real repo, assigns a specialist engineer +
-  `-reviewer` + stack skill to each task, writes `.ulpi/plans/<name>.md`+`.json`, returns `{tasks, layers}`.
+- **Plan (step 3)** — the planner (per `planHarness`: native / codex / kiro) follows the
+  plan-to-task-list-with-dag methodology unattended (mode auto-selected), grounds every path in the
+  real repo, assigns a specialist engineer + `-reviewer` + stack skill to each task, writes
+  `.ulpi/plans/<name>.md`+`.json`, returns `{tasks, layers}`.
 - **Plan review (steps 4–9)** — reviewer per `planReview` (`skip` / `native` / `codex` / `kiro`). ONE
   bounded loop → fix the plan (JSON-first, re-render MD; fix is always native) → re-review; exits on no
   BLOCK/CONCERN (OBSERVATIONs never block) OR non-convergence, capped at `MAX_REVIEW` (2).
