@@ -22,6 +22,7 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [browse-seo](#browse-seo) | On-page SEO audit — meta tags, headings, schema, Core Web Vitals, mobile rendering |
 | [browse-aeo](#browse-aeo) | Answer Engine Optimization — page audit + SERP analysis for AI Overviews and Perplexity |
 | [browse-geo](#browse-geo) | Generative Engine Optimization monitoring — brand/domain visibility across AI search |
+| [browse-qa](#browse-qa) | QA a feature from a ticket/URL/criteria, then generate reusable browse regression flows |
 | [codemap](#codemap) | Code search + architecture analysis — hybrid vector/BM25, dependency graphs, PageRank |
 | [plan-to-task-list-with-dag](#plan-to-task-list-with-dag) | Decompose features into parallel-ready task DAGs |
 | [map-project](#map-project) | Generate CLAUDE.md from codebase scan |
@@ -30,14 +31,19 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [pr-retro](#pr-retro) | Branch retrospective with merge readiness verdict |
 | [branch-review-before-pr](#branch-review-before-pr) | Structural review — race conditions, trust boundaries |
 | [find-bugs](#find-bugs) | Security audit + bug finding on branch diff |
+| [review-crate](#review-crate) | Deep end-to-end review of one Rust crate → canonical issue file |
+| [bugfix-crate](#bugfix-crate) | Work a Rust crate's issue file — failing test, minimal fix, verify, per finding |
+| [create-tests-extract](#create-tests-extract) | Extract large inline tests into adjacent files, preserving visibility |
 | [go-live-audit](#go-live-audit) | Pre-launch audit — multi-agent workflow: gates, dimension finders, adversarial verify, critic |
-| [ship-playbook](#ship-playbook) | Prompt → planned, built, reviewed, audited — chains plan/review/build/audit skills as one looping Workflow |
+| [ship-playbook](#ship-playbook) | Prompt → planned, built, reviewed, audited — chains plan/review/build/audit skills as one configurable Workflow (one pass, returns findings) |
 | [bugfix](#bugfix) | Fix bugs with red-green workflow — reproducer, root cause, minimal fix, regression tests |
 | [code-simplify](#code-simplify) | Review code for reuse, quality, efficiency |
-| [frontend-design-ui-ux](#frontend-design-ui-ux) | UI/UX design specs and component briefs |
+| [frontend-design-ui-ux](#frontend-design-ui-ux) | Distinctive, locked design language + UX/UI spec — anti-slop, browse inspiration, a11y rigor (no code) |
 | [update-claude-learnings](#update-claude-learnings) | Extract behavioral learnings to CLAUDE.md |
 | [update-agent-learnings](#update-agent-learnings) | Propagate learnings to agent files |
 | [update-skill-learnings](#update-skill-learnings) | Propagate learnings to skill files |
+| [normalize-agent-for-claude](#normalize-agent-for-claude) | Convert a local AGENT.md into a Claude Code optimized agent |
+| [normalize-skill-for-claude](#normalize-skill-for-claude) | Convert a local skill into a Claude Code optimized shape |
 | [start](#start) | Session init — discover skills, select agent persona |
 | [commit](#commit) | Smart conventional commits, pre-commit checks, secret scanning |
 | [create-pr](#create-pr) | Auto-generate PR title/body, push, create via gh |
@@ -60,6 +66,9 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [laravel](#laravel) | Laravel 12 API framework — Actions pattern, AI SDK, Boost, MCP, Filament, Horizon, Pest |
 | [laravel-filament](#laravel-filament) | Filament v5 admin panel — resources, schemas, tables, actions, widgets, v3-to-v5 migration |
 | [rust](#rust) | Rust systems programming — storage engines, SIMD, pgwire, DataFusion, tantivy, HNSW, arenas |
+| [nodejs](#nodejs) | Node.js/Bun backend reference — TS-first, pino, Zod, async, queues, testing |
+| [nestjs](#nestjs) | NestJS reference — modules, DI, guards, interceptors, DTOs, BullMQ, OpenAPI |
+| [docker](#docker) | Docker/containers — multi-stage builds, Compose, hardening, registries, CI |
 
 ---
 
@@ -156,6 +165,20 @@ Requires: `npm install -g @ulpi/browse` + `npm install camoufox-js && npx camouf
 
 ---
 
+## browse-qa
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill browse-qa
+```
+
+**QA a feature from a ticket, URL, or plain-language spec — and leave reusable regression flows behind.**
+
+Turns acceptance criteria, a ticket (e.g. LINEAR-123), a URL, or a description into explicit test scenarios, drives the browser or simulator via the `browse` skill, captures evidence for each failure, and writes a clean QA report. Optionally saves rerunnable `browse` flows so a manual pass becomes regression coverage. For QA loops, not static code review.
+
+Requires: the `browse` skill (`npm install -g @ulpi/browse`)
+
+---
+
 ## codemap
 
 ```bash
@@ -197,7 +220,7 @@ npx skills add https://github.com/ulpi-io/skills --skill map-project
 
 **Generate CLAUDE.md from a codebase scan.**
 
-Scans the project and produces a context file with exports, architecture, dev guide, and project-specific patterns. Keeps the AI context map current after each session or refactor. Supports Laravel, Next.js, NestJS, Expo/React Native, Node.js.
+Scans the project and produces a context file with exports, architecture, dev guide, and project-specific patterns. Also records an **Available Skills & MCP** section — the repo's own skills (`.claude/skills/`) and enabled MCP servers — inline in `CLAUDE.md` so agents prefer them instead of forgetting they exist. Keeps the AI context map current after each session or refactor. Supports Laravel, Next.js, NestJS, Expo/React Native, Node.js.
 
 ---
 
@@ -209,7 +232,7 @@ npx skills add https://github.com/ulpi-io/skills --skill map-project-monorepo
 
 **Per-package CLAUDE.md for monorepos.**
 
-Same as map-project but generates a focused CLAUDE.md for each subdirectory — exports, key files, dependencies, conventions. Each package gets its own self-contained context file.
+Same as map-project but generates a focused CLAUDE.md for each subdirectory — exports, key files, dependencies, conventions. Each package gets its own self-contained context file, and the **root** CLAUDE.md gets an inline **Available Skills & MCP** section (the repo's skills + enabled MCP servers) so agents prefer them instead of forgetting they exist.
 
 ---
 
@@ -281,7 +304,7 @@ npx skills add https://github.com/ulpi-io/skills --skill ship-playbook
 
 **One feature prompt → planned, built, reviewed, and audited — end to end.**
 
-The delivery capstone: it chains the repo's own skills into a single runnable 14-step Workflow and loops on any findings until the gates are genuinely clean. It asks two questions up front — which second harness cross-reviews (`claude` / `codex` / `kiro` / `none`) and whether to run a go-live audit — then runs: **plan** (`plan-to-task-list-with-dag`, assigning a specialist engineer + reviewer + stack skill per task) → **plan review** (`plan-founder-review`, looped to APPROVE, optionally with a second harness) → **build** (per task across the DAG layers: specialist engineer in an isolated worktree → in-workflow `git merge` → matched `-reviewer` → bounded fix loop) → **implementation review** (native ∥ harness) → **go-live audit** (composes `go-live-audit` inline) → **bounded recursion** that re-plans and re-runs on confirmed findings. On exhaustion it escalates honestly rather than faking a clean verdict. Explicit-user-only; spawns many agents over multiple rounds.
+The delivery capstone: it chains the repo's own skills into a single runnable Workflow that runs **one pass** and returns the verified findings as feedback — it does **not** loop on its own (an autonomous fix-loop is what caused multi-hour grinds; the user decides whether to run a fix round). Up front it shows which composed skills and specialist agents are installed (with install commands), then asks **seven gate questions** — who writes the plan, who reviews it, who writes the code, who reviews each task, impl review, go-live audit, and an optional project-map refresh. Every role **independently** picks its executor (`native` / `codex` / `kiro`; reviews can `skip`; the writer and a reviewer may be different harnesses), so you control quality vs token cost. Then it runs: **plan** (`plan-to-task-list-with-dag`, assigning a specialist engineer + `-reviewer` + stack skill per task) → **plan review** (`plan-founder-review`, bounded loop) → **build** (per task across the DAG layers: specialist engineer in an isolated worktree → in-workflow `git merge` → matched `-reviewer` → bounded fix loop) → **impl review** (plan-vs-implementation) → **verify** (dedup + adversarial verification) → **go-live audit** (composes `go-live-audit` inline, only when requested and the build comes back clean). It returns the verified findings honestly rather than faking a clean verdict. Explicit-user-only; spawns many agents over the run, behind concurrency caps that keep it under Claude's API rate limits.
 
 ---
 
@@ -309,15 +332,51 @@ Analyzes changed code for unnecessary complexity, duplication, and missed reuse 
 
 ---
 
+## review-crate
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill review-crate
+```
+
+**Deep end-to-end review of a single Rust crate.**
+
+Reads every file in the crate, runs the crate tests, verifies real findings against the code, and writes or appends a canonical issue file under `.ulpi/issues/<crate>.md`. Runs as a forked analysis workflow with its own reasoning budget. For one crate at a time — for a branch diff use `find-bugs`.
+
+---
+
+## bugfix-crate
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill bugfix-crate
+```
+
+**Work through a Rust crate's issue file, one finding at a time.**
+
+The repair counterpart to `review-crate`: takes an existing `.ulpi/issues/<crate>.md` and fixes each finding with a failing regression test first, a minimal fix second, full crate test + clippy verification third, then updates the issue file's status. Strict red-green discipline; uses the `rust` skill for conventions.
+
+---
+
+## create-tests-extract
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill create-tests-extract
+```
+
+**Move bulky inline tests out of source files without weakening them.**
+
+Extracts large inline `#[cfg(test)]` modules (or equivalent) into adjacent test files while preserving the original visibility and helper-access model — so private unit tests don't silently degrade into weaker integration tests. Touches production code only as much as module wiring requires, then runs the narrowest relevant tests.
+
+---
+
 ## frontend-design-ui-ux
 
 ```bash
 npx skills add https://github.com/ulpi-io/skills --skill frontend-design-ui-ux
 ```
 
-**UI/UX design methodology for implementation-ready specs.**
+**A distinctive, consistent, buildable design language — not generic AI output, and not code.**
 
-Produces component briefs, design tokens, and user flow specifications for handoff to engineering agents. For designing new features, creating design systems, or specifying component behavior.
+Commits to one bold aesthetic direction, then **locks** it in a per-project `DESIGN.md` (palette, type, scales, signature, voice) so every screen and future session stays consistent. Bans AI-slop by name (purple-glow, cream defaults, 3-equal-cards, em-dashes…), and can **visit inspiration links with the `browse` skill** to extract real design DNA and synthesize — never clone. Keeps the rigor most design skills skip: full state coverage, user flows with edge cases, and WCAG/ARIA/keyboard accessibility. Ends with a scored pre-flight gate, then hands a complete spec (design language + flows + component briefs + acceptance criteria) to an engineering agent. For new features, redesigns, design-system work, or making an existing UI look less templated.
 
 ---
 
@@ -354,6 +413,30 @@ npx skills add https://github.com/ulpi-io/skills --skill update-skill-learnings
 **Propagate learnings to skill files.**
 
 When a session reveals patterns about structuring skills, this skill updates the central skill learnings file and syncs to appropriate skills.
+
+---
+
+## normalize-agent-for-claude
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill normalize-agent-for-claude
+```
+
+**Convert a local AGENT.md into a Claude Code optimized agent.**
+
+Audits one agent against Claude Code's agent runtime, produces a per-agent rewrite plan with source-backed guardrails, and optionally rewrites the frontmatter + system-prompt body so the agent is thinner and more role-specific. Defaults to plan mode; rewrites only when asked.
+
+---
+
+## normalize-skill-for-claude
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill normalize-skill-for-claude
+```
+
+**Convert a local skill into a Claude Code optimized shape.**
+
+Audits one skill folder or SKILL.md against Claude Code's skill runtime, produces a per-skill rewrite plan with source-backed guardrails, and optionally rewrites frontmatter, body, and references for better routing, a smaller prompt footprint, and safer execution. Defaults to plan mode; rewrites only when asked.
 
 ---
 
@@ -653,3 +736,39 @@ npx skills add https://github.com/ulpi-io/skills --skill rust
 **Rust systems programming reference for AI coding agents.**
 
 Comprehensive skill for building high-performance Rust systems — database storage engines, custom binary formats, wire protocols, query execution, search, and vector indexes. Covers WAL/mmap/MVCC storage with pluggable backends, zero-copy binary formats (BMAP, BARR, packed decimal), DataFusion/Arrow SQL execution with custom table providers and UDFs, pgwire and MySQL wire protocol servers with full ORM compatibility, tantivy full-text search with HNSW vector indexing and SIMD distance functions, arena-allocated graph engines with traversal algorithms, R-tree geospatial with bi-temporal time-travel, tokio async patterns with io_uring and lock-free concurrency, proptest property testing, and unsafe Rust patterns for mmap/SIMD/FFI. Includes 12 reference files covering stack, storage engine, binary formats, type system, DataFusion/Arrow, wire protocols, search/vector, arena/graph, geo/temporal, async/concurrency, testing, and error handling/unsafe.
+
+---
+
+## nodejs
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill nodejs
+```
+
+**Node.js / Bun backend reference for AI coding agents.**
+
+TypeScript-first backend conventions: structured error handling, pino logging, Zod validation, async patterns, HTTP server conventions, database access, auth, queues, caching, testing, security, CLI tooling, and observability — across both Node.js and Bun runtimes. A routing shell over a reference set; loads only what the task needs.
+
+---
+
+## nestjs
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill nestjs
+```
+
+**NestJS reference for AI coding agents.**
+
+Module-based architecture skill covering modules, controllers, providers, DTOs with class-validator, TypeORM/Prisma, guards, interceptors, pipes, BullMQ queues, WebSockets, microservices, testing, OpenAPI, and CLI scaffolding. A routing shell over a reference set; loads only the references the task needs.
+
+---
+
+## docker
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill docker
+```
+
+**Docker and container infrastructure for AI coding agents.**
+
+Covers Dockerfiles, multi-stage builds, Compose, networking, volumes, health checks, registries, BuildKit, security hardening, CI/CD integration, and debugging. Defaults to multi-stage builds and non-root production users. A routing shell over a reference set; for Kubernetes manifests use a k8s skill instead.
