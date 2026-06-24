@@ -634,7 +634,7 @@ npx skills add https://github.com/ulpi-io/skills --skill kiro-review
 
 **Independent AI review via Kiro CLI.**
 
-Get a second opinion on code changes using Amazon's Kiro. Analyzes the diff, builds focused review prompts, and launches `kiro-cli` via a bundled helper with **scoped read-only trust** (`fs_read,execute_bash` — no write access; the prompt is written with the Write tool and fed over stdin, never argv/shell). Parses prioritized findings and supports iterative multi-round reviews. Use for cross-review before merging or when you want a rival AI to verify Claude's work.
+Get a second opinion on code changes using Amazon's Kiro. Analyzes the diff, builds focused review prompts, and launches `kiro-cli` via a bundled helper with **scoped read-only trust** (`fs_read,execute_bash` — no write access; the prompt is written with the Write tool and fed over stdin, never argv/shell). Can **inject installed kiro skills** (`--skill <name>` → the helper resolves `.kiro/skills/<name>/SKILL.md` and prepends it) so kiro reviews against your stack conventions — kiro has no Skill tool of its own. Parses prioritized findings and supports iterative multi-round reviews. Use for cross-review before merging or when you want a rival AI to verify Claude's work.
 
 Requires: `kiro-cli` + logged in (`kiro-cli login`)
 
@@ -648,7 +648,7 @@ npx skills add https://github.com/ulpi-io/skills --skill hand-over-to-kiro
 
 **Delegate an implementation task to the Kiro CLI — and get a verified report back.**
 
-Hand a plan or a task to Amazon's Kiro to *build* (the write-side counterpart to `/kiro-review`). Claude gathers context, writes a self-contained, **injection-safe** prompt with the Write tool (user input rephrased and wrapped in boundary tags — never interpolated into the shell), then launches `kiro-cli` via a bundled helper that feeds the prompt over **stdin**, refuses to run on an empty prompt, and uses **scoped trust by mode** (`implement` = `fs_read,fs_write,execute_bash`; `--trust-all-tools` is a pre-authorized opt-in only). Verifies the result against `git diff` and reports files changed, errors, and what's left. Used by `/ship-playbook` as its kiro build handoff.
+Hand a plan or a task to Amazon's Kiro to *build* (the write-side counterpart to `/kiro-review`). Claude gathers context, writes a self-contained, **injection-safe** prompt with the Write tool (user input rephrased and wrapped in boundary tags — never interpolated into the shell), then launches `kiro-cli` via a bundled helper that feeds the prompt over **stdin**, refuses to run on an empty prompt, and uses **scoped trust by mode** (`implement` = `fs_read,fs_write,execute_bash`; `--trust-all-tools` is a pre-authorized opt-in only). It also **injects the task's stack skill** (`--skill nextjs` → the helper resolves and prepends `.kiro/skills/nextjs/SKILL.md`) so kiro builds to your conventions — kiro has no Skill tool of its own. Verifies the result against `git diff` and reports files changed, errors, and what's left. Used by `/ship-playbook` as its kiro build handoff.
 
 Credit: original skill by **Sabeur Thabti** ([@thabti](https://github.com/thabti/hand-over-to-kiro)), MIT — adapted to the @ulpi/skills conventions.
 

@@ -3,8 +3,9 @@ name: kiro-review
 version: 2.3.0
 description: |
   Run Kiro CLI as an independent reviewer over the current branch, a specific commit, or
-  uncommitted changes. Builds a focused prompt from the real diff and returns a compact review
-  summary.
+  uncommitted changes. Builds a focused prompt from the real diff, runs kiro read-only via a bundled
+  helper (scoped `fs_read,execute_bash` trust), can inject stack-convention skills (`--skill <name>`),
+  and returns a compact review summary.
 allowed-tools:
   - Bash
   - Read

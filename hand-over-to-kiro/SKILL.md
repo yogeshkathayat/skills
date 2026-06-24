@@ -6,8 +6,9 @@ description: |
   asks to hand work to kiro — "/hand-over-to-kiro", "delegate to kiro", "let kiro handle/do this",
   "pass to kiro", "hand over to kiro", or any variant requesting kiro-cli execution. Two modes: Plan
   mode passes an existing plan to kiro for implementation; Direct mode passes the user's task. Claude
-  gathers context, builds a self-contained injection-safe prompt, invokes kiro-cli, captures output,
-  verifies the diff, and reports back.
+  gathers context, builds a self-contained injection-safe prompt, injects the task's relevant kiro
+  skills (`--skill <name>`, since kiro has no Skill tool of its own), invokes kiro-cli via a bundled
+  helper with scoped trust, captures output, verifies the diff, and reports back.
 allowed-tools:
   - Bash
   - Read
