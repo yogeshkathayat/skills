@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.3.0
+version: 1.4.0
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -280,7 +280,7 @@ Workflow({ scriptPath: ".../references/workflow-template.js",
            args: { prompt, root, workingBranch, validate, hardRules, goLive,
                    planHarness, planReview, buildHarness, taskReview, implReview,
                    auditScriptPath, availableAgents, allowGeneralFallback,
-                   planPath } })   // RESUME: planPath (or a parsed `plan` object) → skip plan + plan-review, start at build
+                   planPath, kiroModel } })   // planPath → RESUME at build; kiroModel → kiro model (default latest Opus, claude-opus-4.8)
 ```
 
 **Resuming?** Pass `planPath` (or `plan`) instead of relying on `prompt`/`planHarness`/`planReview` —

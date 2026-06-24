@@ -111,8 +111,11 @@ valid `model` + native `fs_read`/`execute_bash` tools — see the model list via
 `grep`/`find`/`git` to verify findings against source, with NO write access. Do NOT use
 `--trust-all-tools` / `-a`: a review is read-only and the auto-mode classifier blocks unrestricted
 trust on non-mutating tasks. The helper feeds the prompt via kiro's stdin, refuses to launch on an
-empty prompt, and captures a git baseline. (If a specific model is required, set kiro's default first:
-`kiro-cli settings chat.defaultModel <model>`.)
+empty prompt, and captures a git baseline.
+
+**Models** — pass `--model <name>`. Valid values: `auto` (default), `claude-opus-4.8` / `4.7` / `4.6`,
+`claude-sonnet-4.6` / `4.5` / `4`, `claude-haiku-4.5` (run `kiro-cli chat --list-models` to refresh).
+Claude-Code names like `opus` / `sonnet` are NOT valid — kiro errors `model 'opus' is not available`.
 
 Use a Bash timeout of 600000 ms for a large review. If the helper exits with "prompt file is EMPTY",
 re-write the prompt and retry — never run kiro on an empty prompt.

@@ -145,6 +145,11 @@ const EXISTING_PLAN = (CFG.plan && typeof CFG.plan === 'object' && Array.isArray
 const PLAN_PATH = (typeof CFG.planPath === 'string' && CFG.planPath.trim()) ? CFG.planPath.trim() : null
 const RESUME_PLAN = !!(EXISTING_PLAN || PLAN_PATH)
 
+// Model for kiro runs (build via hand-over-to-kiro, review via kiro-review). Latest Opus by default —
+// kiro model names differ from Claude-Code's ("opus" is invalid; valid: claude-opus-4.8/4.7/4.6,
+// claude-sonnet-4.6/…, auto). Override with CFG.kiroModel. See hand-over-to-kiro/references/kiro-cli.md.
+const KIRO_MODEL = (typeof CFG.kiroModel === 'string' && CFG.kiroModel.trim()) ? CFG.kiroModel.trim() : 'claude-opus-4.8'
+
 // Fail LOUD if inputs never reached the script. Without this, the values above stay at their FILL:
 // placeholders, the plan agent is handed "FILL: the feature request", returns no tasks, and the run
 // reports a fake converged:true. Refuse to start on placeholders rather than emit a false clean.
@@ -163,7 +168,7 @@ function routeReview(who, brief, label, phaseTitle) {
   if (who === 'codex')
     return rAgent(`READ-ONLY review — do NOT edit.\n${brief}`, { label, phase: phaseTitle, schema: FINDINGS, agentType: 'codex:codex-rescue' })
   if (who === 'kiro')
-    return rAgent(`Use the kiro-review skill (\`/kiro-review\`) to drive the Kiro CLI over the surface below, READ-ONLY — do NOT edit. If the Kiro CLI is unavailable, say so and return an empty findings list; do NOT substitute your own native review.\n${brief}`, { label, phase: phaseTitle, schema: FINDINGS, agentType: 'general-purpose' })
+    return rAgent(`Use the kiro-review skill (\`/kiro-review\`) to drive the Kiro CLI over the surface below, READ-ONLY — do NOT edit; run kiro with \`--model ${KIRO_MODEL}\` (latest Opus). If the Kiro CLI is unavailable, say so and return an empty findings list; do NOT substitute your own native review.\n${brief}`, { label, phase: phaseTitle, schema: FINDINGS, agentType: 'general-purpose' })
   return rAgent(`${brief}\n(native claude)`, { label, phase: phaseTitle, schema: FINDINGS })   // native
 }
 const rank = { BLOCK: 3, CONCERN: 2, OBSERVATION: 1 }
@@ -426,7 +431,7 @@ function buildSpawn(t, brief, label) {
   if (BUILD_HARNESS === 'codex')
     return spawnSpecialist(`You MAY edit files to implement this task.\n${brief}`, { label, phase: 'Build', schema: TASK_RESULT, agentType: 'codex:codex-rescue', isolation: 'worktree' })
   if (BUILD_HARNESS === 'kiro')
-    return spawnSpecialist(`Use the hand-over-to-kiro skill (\`/hand-over-to-kiro\`) to delegate implementing this task to kiro-cli — it writes an injection-safe prompt to a file and launches kiro via its helper in this worktree, then verifies the diff. This is UNATTENDED: use the skill's \`implement\` mode (scoped write trust \`fs_read,fs_write,execute_bash\`) — do NOT use \`--trust-all-tools\` (unsafe-by-default; the harness blocks it). ${t.stackSkill ? `Have kiro FOLLOW the ${t.stackSkill} skill — kiro has no Skill tool, so pass it to the hand-over helper as \`--skill <name>\` (the matching \`.kiro/skills/<name>\`), which injects the skill into kiro's prompt over stdin. ` : ''}If the hand-over-to-kiro skill or kiro-cli is unavailable, say so and implement the task yourself.\n${brief}`, { label, phase: 'Build', schema: TASK_RESULT, agentType: 'general-purpose', isolation: 'worktree' })
+    return spawnSpecialist(`Use the hand-over-to-kiro skill (\`/hand-over-to-kiro\`) to delegate implementing this task to kiro-cli — it writes an injection-safe prompt to a file and launches kiro via its helper in this worktree, then verifies the diff. This is UNATTENDED: use the skill's \`implement\` mode (scoped write trust \`fs_read,fs_write,execute_bash\`) — do NOT use \`--trust-all-tools\` (unsafe-by-default; the harness blocks it). Run kiro with \`--model ${KIRO_MODEL}\` (latest Opus). ${t.stackSkill ? `Have kiro FOLLOW the ${t.stackSkill} skill — kiro has no Skill tool, so pass it to the hand-over helper as \`--skill <name>\` (the matching \`.kiro/skills/<name>\`), which injects the skill into kiro's prompt over stdin. ` : ''}If the hand-over-to-kiro skill or kiro-cli is unavailable, say so and implement the task yourself.\n${brief}`, { label, phase: 'Build', schema: TASK_RESULT, agentType: 'general-purpose', isolation: 'worktree' })
   return spawnSpecialist(brief, { label, phase: 'Build', schema: TASK_RESULT, agentType: resolveAgent(t.agent), isolation: 'worktree' })
   })
 }
@@ -436,7 +441,7 @@ function taskReviewSpawn(t, brief, label) {
   if (TASK_REVIEW === 'codex')
     return spawnSpecialist(`READ-ONLY review — do NOT edit.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'codex:codex-rescue' })
   if (TASK_REVIEW === 'kiro')
-    return spawnSpecialist(`Use the kiro-review skill (\`/kiro-review\`) to review this task via the Kiro CLI, READ-ONLY; if the Kiro CLI is unavailable, say so and return empty findings — do not substitute a native review.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'general-purpose' })
+    return spawnSpecialist(`Use the kiro-review skill (\`/kiro-review\`) to review this task via the Kiro CLI, READ-ONLY, with \`--model ${KIRO_MODEL}\` (latest Opus); if the Kiro CLI is unavailable, say so and return empty findings — do not substitute a native review.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'general-purpose' })
   return spawnSpecialist(brief, { label, phase: 'Build', schema: FINDINGS, agentType: resolveAgent(t.reviewer) })   // native
   })
 }
