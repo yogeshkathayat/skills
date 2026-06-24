@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.2.0
+version: 1.3.0
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -51,7 +51,9 @@ This skill drives a long-running, multi-agent delivery Workflow. Non-negotiable 
 2. Intake order is FIXED: (1) dependency check + continue/restart, then (2) the SEVEN gate questions —
    who writes the plan, who reviews the plan, who writes the code, who reviews the code, impl review,
    go-live audit, map project — then (3) scope grounding + facts. ALWAYS ask the seven gate questions
-   FIRST, right after the dependency check. NEVER precede them with scope/feature-clarification
+   FIRST, right after the dependency check. (RESUME exception: when the user points at an existing,
+   already-reviewed DAG plan, the first two — plan writer + plan reviewer — are skipped; ask the other
+   five and pass the plan in as `planPath`/`plan` so the run starts at build.) NEVER precede them with scope/feature-clarification
    questions ("full platform or just the API?", "which protocol?") — the prompt is the scope; ground it
    in step 3 or let the plan phase challenge it. Honor the gate choices: full rigor or skip both valid.
 3. The BUILD is a Workflow phase, not a description. Per task across the DAG layers: the ENGINEER
@@ -86,6 +88,8 @@ This skill drives a long-running, multi-agent delivery Workflow. Non-negotiable 
 
 - `$request`: The feature prompt — what to plan, build, review, and ship. May carry overrides like
   `harness=codex` or `golive=yes` to seed intake. For a fix round, pass the prior findings as the prompt.
+  To **RESUME** from an existing, already-reviewed DAG plan, point at it (e.g. `resume .ulpi/plans/<name>.md`
+  or `--plan .ulpi/plans/<name>.json`): the run skips planning + plan-review and starts at build.
 
 ## Goal
 
@@ -179,6 +183,13 @@ Record what's available — it feeds `availableAgents` and constrains which inta
 The prompt is `$request`. Ask the SEVEN gate questions (across two `AskUserQuestion` calls — up to 4
 each), in EXECUTION order so they read like the run, unless `$request` already pins them.
 
+**RESUME mode.** If `$request` points at an existing reviewed plan (a `.ulpi/plans/<name>` path, or the
+user asks to resume), the run starts at BUILD: **skip gate questions 1 (who writes the plan) and 2 (who
+reviews it)** — both are already done — and ask only the remaining five (code writer, code reviewer,
+impl review, go-live, map). Read the plan's `.json` and confirm it is well-formed (tasks[] with id /
+agent / writeScope / validate, and layers[][]) before proceeding; if it is malformed or stale, say so
+and offer to (re)plan instead of resuming.
+
 **These gate questions come FIRST — immediately after the dependency check (Step 1).** Do NOT precede
 them with scope/feature-clarification questions ("full platform or just the API?", "which SSO
 protocol?", etc.). The prompt IS the scope; if it's broad or ambiguous, you ground it in Step 3 (AFTER
@@ -242,6 +253,12 @@ plan then assigns ONLY agents from that list (it can't invent one that isn't ins
 returns `missingAgents` for anything that still slips through. Never silently substitute
 `general-purpose` for a missing specialist without the user having seen the gap in Step 1.
 
+**When RESUMING from an existing plan**, also resolve the plan here: read `.ulpi/plans/<name>.json`
+(the `.md` renders from it), validate the DAG shape (tasks[] with id / agent / writeScope / validate,
+acyclic layers[][]), and pass `planPath` (the path) — or the parsed `plan` object — in `args`. Do NOT
+re-plan. The Workflow loads/validates it and skips both the plan and plan-review phases. If the plan is
+missing or malformed, stop and offer to (re)plan instead.
+
 Open a master `TodoWrite` mirroring the phases in `references/playbook-state.md`.
 
 **Success criteria**: dependency status was shown and the user chose continue-or-restart;
@@ -262,8 +279,12 @@ Then launch `references/workflow-template.js` via the **Workflow** tool, passing
 Workflow({ scriptPath: ".../references/workflow-template.js",
            args: { prompt, root, workingBranch, validate, hardRules, goLive,
                    planHarness, planReview, buildHarness, taskReview, implReview,
-                   auditScriptPath, availableAgents, allowGeneralFallback } })
+                   auditScriptPath, availableAgents, allowGeneralFallback,
+                   planPath } })   // RESUME: planPath (or a parsed `plan` object) → skip plan + plan-review, start at build
 ```
+
+**Resuming?** Pass `planPath` (or `plan`) instead of relying on `prompt`/`planHarness`/`planReview` —
+those are ignored when a plan is supplied. The Workflow loads the plan, validates it, and starts at build.
 
 `mapRefresh` is deliberately NOT in `args` — it's the only intake answer the Workflow doesn't run.
 The map refresh regenerates `CLAUDE.md` from the FINISHED code, so the skill runs it itself in Phase 3
@@ -280,7 +301,9 @@ The Workflow then executes the playbook in one pass, running each gate at the le
 - **Plan (step 3)** — the planner (per `planHarness`: native / codex / kiro) follows the
   plan-to-task-list-with-dag methodology unattended (mode auto-selected), grounds every path in the
   real repo, assigns a specialist engineer + `-reviewer` + stack skill to each task, writes
-  `.ulpi/plans/<name>.md`+`.json`, returns `{tasks, layers}`.
+  `.ulpi/plans/<name>.md`+`.json`, returns `{tasks, layers}`. **RESUME:** when `planPath`/`plan` is
+  supplied, this phase instead LOADS that already-reviewed plan (an agent reads + validates + normalizes
+  it; no re-planning) and **plan review is skipped** — the run resumes at build.
 - **Plan review (steps 4–9)** — reviewer per `planReview` (`skip` / `native` / `codex` / `kiro`). ONE
   bounded loop → fix the plan (JSON-first, re-render MD; fix is always native) → re-review; exits on no
   BLOCK/CONCERN (OBSERVATIONs never block) OR non-convergence, capped at `MAX_REVIEW` (2).
@@ -312,7 +335,7 @@ the script re-executes from the top, so omitting `args` empties `CFG` and the sc
 `FILL:` guard. Always include the full `args` object you launched with.
 
 **Success criteria**: The Workflow runs to completion and returns
-`{ converged, ranReal, plan, build, openRegister, missingAgents, reviewConfig, noReviewGate }`.
+`{ converged, ranReal, plan, planSupplied, build, openRegister, missingAgents, reviewConfig, noReviewGate }`.
 
 ## Phase 3 — Report and escalate
 
@@ -327,6 +350,8 @@ Read the Workflow result:
 - **If `noReviewGate: true`** (the user skipped BOTH per-task review and impl review), CAVEAT any
   clean verdict: it only means the engineer validates passed, nothing reviewed the build. Report
   `reviewConfig` so the user sees which gates ran.
+- **If `planSupplied: true`**, the run RESUMED from a pre-reviewed plan: planning and plan-review were
+  skipped by design — say so, so a clean verdict isn't misread as "the plan went unreviewed."
 - **`converged: true`** (real run, `openRegister` empty) → DONE. Report the build outcome per task,
   the review/audit verdicts (per `reviewConfig`), and where the plan landed.
 - **`openRegister` non-empty** → PRESENT the feedback and let the user decide. List the verified

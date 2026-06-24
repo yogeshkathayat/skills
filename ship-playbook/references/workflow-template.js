@@ -20,8 +20,10 @@
 //            buildHarness,                             // 'native' | 'codex' | 'kiro'  (who WRITES each task + fixes)
 //            taskReview,                               // 'skip' | 'native' | 'codex' | 'kiro'  (who REVIEWS each built task)
 //            implReview,                               // 'skip' | 'native' | 'codex' | 'kiro'  (impl review after all tasks)
-//            auditScriptPath, availableAgents, allowGeneralFallback }
-//   (auditScriptPath is optional — see the comment at its CFG read below.)
+//            auditScriptPath, availableAgents, allowGeneralFallback,
+//            planPath | plan }                         // RESUME: an already-reviewed DAG plan (path or parsed object)
+//   (auditScriptPath is optional — see the comment at its CFG read below. planPath/plan are optional —
+//    when set, the run RESUMES at the build phase: prompt/planHarness/planReview are ignored.)
 //   Every role picks its own executor (writer + each reviewer INDEPENDENT — write codex, review kiro is
 //   fine). Reviews also allow 'skip'. From full-rigor (every review on, codex/kiro where wanted, goLive)
 //   down to fast (every review skip). Lighter is the default.
@@ -135,10 +137,20 @@ const AUDIT_SCRIPT_PATH = CFG.auditScriptPath || null
 const AVAILABLE_AGENTS = Array.isArray(CFG.availableAgents) ? CFG.availableAgents : null
 const ALLOW_GENERAL_FALLBACK = CFG.allowGeneralFallback !== false   // default true: degrade, don't crash
 
+// RESUME from an existing, already-reviewed DAG plan: skip plan-WRITING and plan-REVIEW, start at BUILD.
+// The skill passes either the parsed plan object (CFG.plan) or a path to it (CFG.planPath). The sandbox
+// can't read files, so a path is loaded + validated + normalized by an agent. When either is set, the
+// Plan and Plan-review phases are skipped and PROMPT is not required (the plan IS the spec).
+const EXISTING_PLAN = (CFG.plan && typeof CFG.plan === 'object' && Array.isArray(CFG.plan.tasks)) ? CFG.plan : null
+const PLAN_PATH = (typeof CFG.planPath === 'string' && CFG.planPath.trim()) ? CFG.planPath.trim() : null
+const RESUME_PLAN = !!(EXISTING_PLAN || PLAN_PATH)
+
 // Fail LOUD if inputs never reached the script. Without this, the values above stay at their FILL:
 // placeholders, the plan agent is handed "FILL: the feature request", returns no tasks, and the run
 // reports a fake converged:true. Refuse to start on placeholders rather than emit a false clean.
-const _missing = Object.entries({ ROOT, WORKING_BRANCH, VALIDATE_ALL, PROMPT })
+// (PROMPT is only required when WRITING a plan — a resume supplies the plan instead.)
+const _need = RESUME_PLAN ? { ROOT, WORKING_BRANCH, VALIDATE_ALL } : { ROOT, WORKING_BRANCH, VALIDATE_ALL, PROMPT }
+const _missing = Object.entries(_need)
   .filter(([, v]) => typeof v !== 'string' || v.startsWith('FILL:')).map(([k]) => k)
 if (_missing.length) {
   throw new Error(`ship-playbook: inputs did not reach the script — ${_missing.join(', ')} still at FILL: placeholder (typeof args="${typeof args}"). Pass args as a real JSON object per the skill's Phase 2 contract, NOT a stringified blob, then relaunch as a FRESH run.`)
@@ -506,24 +518,51 @@ if (pre.workingBranchExists === false) {
 // Clear dangling build worktrees from prior runs BEFORE building, so the integrate validate starts clean.
 await cleanupWorktrees('preflight')
 
-// ── the playbook: ONE pass — plan → plan review → build → impl review → audit → return findings ──
+// Structural sanity check on a plan (supplied OR freshly written) before the build trusts it.
+function validatePlan(p) {
+  if (!p || !Array.isArray(p.tasks) || !p.tasks.length) return 'no tasks in the plan — nothing to build (verify the plan/planPath reached the script and the plan has a non-empty tasks[])'
+  const ids = new Set(p.tasks.map(t => t && t.id))
+  const bad = p.tasks.filter(t => !t || !t.id || !t.agent || !Array.isArray(t.writeScope) || !t.writeScope.length || !t.validate)
+  if (bad.length) return `plan has ${bad.length} task(s) missing required build fields (id / agent / writeScope[] / validate) — re-run plan-to-task-list-with-dag or fix the plan json`
+  if (Array.isArray(p.layers) && p.layers.length) {
+    const unknown = [...new Set(p.layers.flat().filter(id => !ids.has(id)))]
+    if (unknown.length) return `plan layers reference unknown task ids: ${unknown.join(', ')}`
+  }
+  return null
+}
+// RESUME loader: an agent reads the existing plan file (the sandbox can't), validates it against the
+// real repo, normalizes it, and returns the PLAN object — it must NOT re-plan.
+const loadPlanBrief = (path) => `Load an EXISTING ship-playbook plan to RESUME from at the build phase — do NOT re-plan or invent tasks.
+Read the plan at ${path} in ${ROOT} (if it is a .md, also read its sibling .json — the JSON is the source of truth). Return it as structured output: planName, planPath, tasks[] (each: id, agent, reviewer, title, writeScope[], acceptance[], validate, stackSkill|null) and layers[][] (the parallel execution layers as task-id arrays).
+Normalize, don't redesign: if a task has no reviewer, set it to its agent name + '-reviewer'; if layers are absent, derive them from task dependencies (else one layer with every task id). Return exactly the tasks the file defines. If the file is missing or has no tasks, return an empty tasks[].`
+
+// ── the playbook: ONE pass — (write plan → plan review) OR resume → build → impl review → audit → return ──
 // NO automatic recursion. The verified findings are RETURNED as feedback; the skill presents them and
 // the user decides whether to run a fix round (a Workflow can't AskUserQuestion mid-run, and an
 // autonomous fix-loop is what produced the multi-hour grind). Impl review (step 12) is the
 // plan-vs-implementation gate and is the last work the loop used to recurse on — now it just reports.
-phase('Plan')                                              // step 3 — writer per PLAN_HARNESS
-const planAgentType = PLAN_HARNESS === 'codex' ? 'codex:codex-rescue' : 'general-purpose'
-const planPrompt = PLAN_HARNESS === 'kiro'
-  ? `Use the Kiro CLI to produce this plan; if it is unavailable, do it yourself.\n${planBrief(PROMPT)}`
-  : planBrief(PROMPT)
-const plan = await rAgent(planPrompt, { label: `plan:${PLAN_HARNESS}`, phase: 'Plan', schema: PLAN, agentType: planAgentType })
-if (!plan || !plan.tasks || !plan.tasks.length) {
-  return { converged: false, ranReal: false, aborted: 'no tasks were planned — aborted before any build (verify args/PROMPT reached the script)', goLive: GO_LIVE }
+phase('Plan')                                              // step 3 — write a plan, OR resume from a supplied one
+let plan
+if (RESUME_PLAN) {
+  // RESUME: caller supplied an already-created, already-reviewed DAG plan → skip plan + plan-review.
+  plan = EXISTING_PLAN || await rAgent(loadPlanBrief(PLAN_PATH), { label: 'load-plan', phase: 'Plan', schema: PLAN, agentType: 'general-purpose' })
+  log(EXISTING_PLAN ? 'resuming from supplied plan object — skipping plan + plan-review' : `resuming from plan at ${PLAN_PATH} — skipping plan + plan-review`)
+} else {
+  const planAgentType = PLAN_HARNESS === 'codex' ? 'codex:codex-rescue' : 'general-purpose'
+  const planPrompt = PLAN_HARNESS === 'kiro'
+    ? `Use the Kiro CLI to produce this plan; if it is unavailable, do it yourself.\n${planBrief(PROMPT)}`
+    : planBrief(PROMPT)
+  plan = await rAgent(planPrompt, { label: `plan:${PLAN_HARNESS}`, phase: 'Plan', schema: PLAN, agentType: planAgentType })
+}
+const _planError = validatePlan(plan)
+if (_planError) {
+  return { converged: false, ranReal: false, aborted: _planError, goLive: GO_LIVE }
 }
 
-// Plan review (steps 4–9) — reviewer per PLAN_REVIEW: 'skip' | 'native' | 'codex' | 'kiro'. Plan-QUALITY
-// gate (scope, decomposition, phantom paths). ONE bounded loop; exits on no BLOCK/CONCERN or non-convergence.
-if (PLAN_REVIEW !== 'skip') {
+// Plan review (steps 4–9) — SKIPPED when resuming (the supplied plan is already reviewed). Otherwise
+// reviewer per PLAN_REVIEW: 'skip' | 'native' | 'codex' | 'kiro'. Plan-QUALITY gate (scope,
+// decomposition, phantom paths). ONE bounded loop; exits on no BLOCK/CONCERN or non-convergence.
+if (!RESUME_PLAN && PLAN_REVIEW !== 'skip') {
   phase('Plan review')
   await planReviewLoop(plan, PLAN_REVIEW)
 }
@@ -566,6 +605,7 @@ return {
   converged: openRegister.length === 0,
   ranReal: true,
   plan: plan.planName,
+  planSupplied: RESUME_PLAN,    // TRUE when this run RESUMED from a pre-built/pre-reviewed plan (plan + plan-review skipped)
   build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes })),
   openRegister,                 // verified findings = the feedback to show the user
   missingAgents: [...missingAgents],   // specialist agent types the plan wanted that aren't installed here → skill notifies the user
