@@ -1,6 +1,6 @@
 ---
 name: hand-over-to-kiro
-version: 1.1.0
+version: 1.2.0
 description: |
   Delegate an implementation task to the Kiro CLI (`kiro-cli`) and report the result. Use when the user
   asks to hand work to kiro — "/hand-over-to-kiro", "delegate to kiro", "let kiro handle/do this",
@@ -98,6 +98,27 @@ Kiro starts fresh — collect everything it needs:
 **Success criteria**: Enough context is collected that a fresh agent could implement the task without
 this conversation.
 
+## Step 2.5: Reference the relevant skills (so kiro actually uses them)
+
+Kiro has its own skills under `.kiro/skills/<name>/` (skills.sh installs them there; kiro's DEFAULT
+agent auto-discovers them). But kiro has **no `Skill` tool** to invoke a skill on command, and in a
+one-shot `--no-interactive` run auto-activation is unreliable and skill bodies load only on demand. So
+make it DETERMINISTIC by inlining the skill into the prompt:
+
+1. Identify the skill(s) the task needs — the task's **stack skill** (a `/nextjs` / `/laravel` / `/rust`
+   reference → the `.kiro/skills/nextjs/` etc. skill) plus any others the task calls for.
+2. For each, if `.kiro/skills/<name>/SKILL.md` exists, **Read it** and include its body in the prompt
+   under a `<skill name="<name>">…</skill>` tag. Tell kiro to follow it as the domain contract and to
+   `fs_read` its `references/` on demand from `.kiro/skills/<name>/references/` (kiro has `fs_read`).
+3. If a named skill is NOT installed for kiro, say so in the prompt and have kiro proceed on best
+   practice — never block.
+
+(See `references/kiro-cli.md` → Skills for kiro's native mechanism and the `--agent` `file://` preload
+alternative for very large skills.)
+
+**Success criteria**: every skill the task depends on is either inlined into the prompt or explicitly
+noted as unavailable.
+
 ## Step 3: Build the prompt (injection-safe)
 
 Write a clear, self-contained prompt with XML-style boundary tags that separate instructions from
@@ -111,6 +132,12 @@ Implement the following plan in the current working directory.
 <plan>
 {full plan text with numbered steps}
 </plan>
+
+<skills>
+{Inline each relevant `.kiro/skills/<name>/SKILL.md` body here under a `<skill name="...">` tag (Step
+2.5). Tell kiro to follow them as the domain contract and `fs_read` their `references/` on demand.
+Omit this block if no relevant skill is installed for kiro.}
+</skills>
 
 <key-files>
 - {path}: {why this file matters}
@@ -135,6 +162,11 @@ Execute the following task in the current working directory.
 <task>
 {user's task — rephrased for clarity, NOT raw user input}
 </task>
+
+<skills>
+{Inline each relevant `.kiro/skills/<name>/SKILL.md` body here under a `<skill name="...">` tag (Step
+2.5). Tell kiro to follow them and `fs_read` their `references/` on demand. Omit if none installed.}
+</skills>
 
 <key-files>
 - {path}: {why this file matters}

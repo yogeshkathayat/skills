@@ -55,6 +55,27 @@ kiro also reads the prompt from **stdin** when no positional arg is given
 | `/chat save <path>` | Export conversation to file |
 | `/chat load <path>` | Import conversation from file |
 
+## Skills (Agent Skills)
+
+Kiro discovers `SKILL.md` skills and matches them by description, or exposes them as `/<name>` slash commands.
+
+- **Locations (auto-discovered by the DEFAULT agent):** `.kiro/skills/<name>/SKILL.md` (workspace) and
+  `~/.kiro/skills/<name>/SKILL.md` (global). skills.sh installs them here (symlinks). No config needed
+  for the default agent.
+- **No `Skill` tool / no `--trust-tools` token for skills.** A skill is not invoked by a tool call;
+  once loaded it drives the agent's own `fs_read`/`execute_bash`. Trust still governs *those*
+  (`--trust-tools=fs_read,…`). Native tool names: `fs_read`, `fs_write`, `execute_bash`, `use_aws`,
+  `report_issue`, `@<mcp>` (aliases `read`/`write`/`shell`).
+- **Custom agents do NOT auto-load skills.** A `--agent <name>` only sees skills its config lists under
+  `resources`: `file://<path>` preloads the whole file at startup; `skill://<glob>` loads metadata up
+  front and the body on demand (e.g. `"resources": ["skill://.kiro/skills/*/SKILL.md"]`).
+- **One-shot `--no-interactive`:** auto-activation/slash-commands are unreliable in a single turn. To
+  make kiro FOLLOW a specific skill deterministically, either (a) **inline the SKILL.md body in the
+  prompt** (what this skill does — see SKILL.md Step 2.5), or (b) run `--agent` with
+  `resources: ["file://.kiro/skills/<name>/SKILL.md"]` preloaded.
+
+Docs: <https://kiro.dev/docs/cli/skills/> · <https://kiro.dev/docs/cli/custom-agents/configuration-reference/>
+
 ## settings
 
 Read and write configuration values.
