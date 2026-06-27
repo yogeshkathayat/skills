@@ -34,7 +34,14 @@ A intake ──> B plan ──> C plan-review loop (native ∥ harness, bounded)
   OR non-convergence, capped at `MAX_REVIEW` (2).
 - E barriers between DAG layers; each task loops engineer↔reviewer until it passes — unless `taskReview
   skip`, then there is no per-task reviewer/fix loop and a task passes on its engineer validate alone.
-- F (impl review) runs per `implReview` (`skip` / `native` / `codex` / `kiro`) — the plan-vs-implementation gate.
+  The per-task review is **slice-scoped**: it judges only the task's own writeScope + diff against its
+  acceptance criteria, and the fix loop acts only on in-scope blockers. End-state gaps a later task owns
+  are deferred (OBSERVATION), never blocking the slice. (See `build-loop.md`.)
+- F (impl review) runs per `implReview` (`skip` / `native` / `codex` / `kiro`) — the plan-vs-implementation
+  gate AND the **end-state gate**: now that every task has landed, the whole-codebase invariants the
+  per-task reviews deferred (legacy paths gone, routes/links exist, exports consumed) MUST hold. With the
+  integrate-step workspace validate, this is the real "is it working software" signal — not the per-task
+  blocked count.
 - V dedups + adversarially verifies the build+impl findings. Survivors are `openRegister`.
 - If `openRegister` is empty and `goLive`, G (the heaviest phase) runs; otherwise the workflow RETURNS
   `openRegister` as feedback. There is NO automatic loop back to B/E — a fix round is a deliberate
@@ -100,6 +107,15 @@ back to the user as a real defect. The survivors are `openRegister`.
 There is no `maxRounds` and no autonomous recursion. A "fix round" is a fresh invocation the user
 chooses after seeing the feedback, with the findings as the new prompt — small scope, its own pass.
 This is deliberate: an autonomous fix-loop is what produced multi-hour grinds.
+
+## Live status file
+
+Each run mirrors this state machine into a durable `.ulpi/workflows/<id>.json` (overall status, per-phase,
+per-task lifecycle, final `openRegister`). The skill creates it before launch and reads it at report; the
+Workflow updates it at every phase + DAG layer via cheap status-writer agents. It is the at-a-glance
+"where did we get to / stop / resume / retry" record — non-fatal observability that never blocks delivery.
+Full schema, lifecycle, and the status/stop/resume verbs are in `status-tracking.md`; the journal reader is
+`helpers/wf-status.mjs`.
 
 ## Honesty rule
 

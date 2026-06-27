@@ -87,34 +87,53 @@ Spawn the task's assigned specialist agent (the plan's `Agent` field) via the Ag
   - explicit instruction: implement only this task; run the validate command; report files touched +
     validate result + any deviation from the brief.
 
-### 2. Review — the reviewer agent
+### 2. Review — the reviewer agent (SLICE-SCOPED, not an end-state gate)
 
 This step is gated by `taskReview`: `skip` (no per-task reviewer or fix loop — the task passes on its
 engineer validate alone), `native` (the matched `-reviewer` below), or `harness` (the global review
 harness — codex/kiro). When review is enabled, on engineer-done spawn the reviewer read-only over the
-task's diff:
+task's diff.
+
+**The dominant failure mode this guards against.** The build lands ONE slice at a time, so when a reviewer
+sees task X the codebase is half-migrated: legacy paths task Z will remove are still present, routes/links
+task Y will add don't exist yet, exports task X creates have no consumer until task W lands. A reviewer
+that enforces the *whole-codebase end-state* against this mid-build tree BLOCKs task X for work it doesn't
+own and can't fix — burning the entire fix loop doing nothing, then recording a false "blocked". (Observed:
+72/81 reviews blocked, ~184 BLOCKs, dominated by one "legacy path still exists" finding the current task
+had no scope to remove.) So:
 
 - `isolation: "worktree"` against the engineer's branch/worktree; do NOT let it edit.
-- Brief: read the task's diff + surrounding context, verify each acceptance criterion is actually
-  met (not just claimed), check the locked constraints, verify the per-stack skill was applied when
-  one exists, and verify the `validateCommand` truly passes. Report findings as
-  `| # | Severity | File:Line | Issue | Fix |` with severities BLOCK / MAJOR / MINOR, or an explicit
-  "clean".
+- Brief it to review ONLY the task's own slice — its `writeScope` + diff — against ITS OWN acceptance
+  criteria. Pass it **the rest of the plan** (each other task's id, title, `writeScope`) so it can
+  attribute end-state gaps to the owning task.
+- An unmet whole-codebase invariant that a LATER task owns (a legacy path not yet removed, a route/link
+  not yet built, an export whose consumer task hasn't landed) is an **OBSERVATION attributed to that
+  task — NEVER a BLOCK/CONCERN against the current slice**. Pre-existing code the task didn't touch, and
+  exports-for-a-later-consumer, are out of scope (not "dead wiring").
+- BLOCK/CONCERN ONLY for a defect WITHIN the task's `writeScope` it can fix now: an acceptance criterion
+  not actually met, a bug it introduced, the per-stack skill not followed in its own files, or an internal
+  inconsistency in its diff. Verify `validateCommand` passed (the integrate step ran it; review statically
+  — a check you can't run in-sandbox is an OBSERVATION).
 - If the task's `review` field names a harness (codex/kiro), ALSO run that harness review on the
   task diff per `harness-routing.md` and merge findings.
 
-### 3. Fix loop
+### 3. Fix loop — IN-SCOPE blockers only
 
-Hand the reviewer's findings back to the SAME engineer agent (continue it via SendMessage so it
-keeps its context, or respawn with the findings appended to the original brief). The engineer fixes,
-re-runs `validateCommand`, reports. Re-review. Repeat until:
+Filter the reviewer's findings through the task's `writeScope`. Loop **only on BLOCK/CONCERN whose `file`
+the task can actually touch** — handing those back to the SAME engineer (respawn with the findings, or
+SendMessage to keep context); it fixes, re-runs `validateCommand`, re-integrates, re-reviews. Findings
+OUTSIDE `writeScope` are end-state gaps another task owns: count them (`crossTaskDeferred`), surface them
+to impl review, but NEVER feed them to this engineer (it can't edit them) and NEVER let them block the
+slice. Repeat until:
 
-- the reviewer returns clean (no BLOCK/MAJOR), AND
+- no in-scope BLOCK/CONCERN remains, AND
 - `validateCommand` passes green, AND
 - the task-exit gate (below) is satisfied.
 
-Cap the per-task fix loop (e.g. 3 iterations); if it still fails, stop and surface the task as
-blocked rather than merging broken work.
+Cap the per-task fix loop (e.g. 3 iterations); if an in-scope blocker still remains, stop and surface the
+task as blocked rather than merging broken work. The whole-codebase end-state is enforced LATER — by impl
+review (step 12) over the fully-integrated tree, plus the integrate-step workspace `validate`. That, not
+the per-task blocked count, is the "is it real working software" signal.
 
 ### 4. Merge the layer
 
@@ -138,5 +157,8 @@ A task is "done" only when ALL hold (mirrors the structured-plan exit discipline
 4. If the task is identity/routing/registry/isolation-sensitive (auth, RLS, route barrel, adapter
    registry, secret handling), the engineer proved the negative case too (the unauthorized/empty/
    cross-tenant path fails closed), not just the happy path.
-5. New files that must be exported/registered/wired are actually reachable (no dead wiring) — a
-   created-but-unregistered route/export is a fail-closed defect, not "done".
+5. New files that must be exported/registered/wired WITHIN THIS TASK'S scope are actually reachable (no
+   dead wiring) — a created-but-unregistered route/export whose registration is *this task's* job is a
+   fail-closed defect, not "done". But an export whose CONSUMER is a later planned task is expected
+   mid-build — that wiring completes when the consumer task lands, and is the impl-review end-state gate's
+   concern, not a blocker on this slice.

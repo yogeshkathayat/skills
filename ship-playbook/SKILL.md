@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.4.0
+version: 1.5.0
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -80,6 +80,19 @@ This skill drives a long-running, multi-agent delivery Workflow. Non-negotiable 
    verdict, and never silently loop.
 8. Keep this body focused on launching + reporting the Workflow. Load the build contract, harness
    routing, state machine, and the Workflow script itself from `references/`.
+9. Per-task review is SLICE-SCOPED, never an end-state gate. The build lands one slice at a time, so a
+   per-task reviewer judges ONLY that task's own writeScope + diff against ITS acceptance criteria — it
+   is given the rest of the plan and must attribute an unmet whole-codebase invariant (a legacy path a
+   LATER task removes, a route/link a later task adds, an export a later task consumes) to the OWNING
+   task as an OBSERVATION, NOT a BLOCK against the current slice. The fix loop only acts on findings
+   INSIDE the task's writeScope (the engineer can't fix what it can't touch). The whole-codebase
+   end-state is the IMPL-REVIEW gate (step 12) + the integrate-step workspace validate — that is the
+   real "is it working software" signal, not the per-task blocked count.
+10. Each run gets a LIVE status file at `<root>/.ulpi/workflows/<workflow-id>.json` — the SKILL creates
+    it before launch (this sandboxed Workflow has no FS access), the Workflow updates it at every phase
+    + DAG layer via cheap status-writer agents, and the skill reads it back in Phase 3. Status tracking
+    is OBSERVABILITY and is NON-FATAL: a failed status write is logged and ignored, NEVER blocking the
+    build. The file is the at-a-glance "where did we get to / stop / resume / retry" record.
 </EXTREMELY-IMPORTANT>
 
 # Ship Playbook
@@ -273,6 +286,23 @@ thin pass: run the **`go-live-audit`** skill to generate the project-tailored au
 capture the `scriptPath` the Workflow tool persists for it; pass that path in as `auditScriptPath`.
 (If you skip this, step 13 falls back to an inline finder pass.)
 
+**First, create the live status file** (the Workflow sandbox has no filesystem access, so the SKILL must
+create it). Pick a `workflowId` — `ship-<UTC timestamp>-<short-slug-of-the-prompt>` (e.g. via Bash
+`date -u +%Y%m%dT%H%M%SZ`) — set `statusFile = <root>/.ulpi/workflows/<workflowId>.json` (ABSOLUTE), and
+`Write` the initial document so a watcher sees the run the instant it launches:
+
+```json
+{ "schemaVersion": 1, "workflowId": "<id>", "skill": "ship-playbook", "status": "initializing",
+  "prompt": "<prompt>", "root": "<root>", "workingBranch": "<branch>", "createdAt": "<UTC now>",
+  "config": { "planHarness": "...", "planReview": "...", "buildHarness": "...", "taskReview": "...",
+              "implReview": "...", "goLive": false },
+  "plan": null,
+  "phases": { "plan": {"status":"pending"}, "plan_review": {"status":"pending"},
+              "build": {"status":"pending"}, "impl_review": {"status":"pending"},
+              "verify": {"status":"pending"}, "audit": {"status":"pending"} },
+  "tasks": {}, "openRegister": [], "result": null }
+```
+
 Then launch `references/workflow-template.js` via the **Workflow** tool, passing intake as `args`:
 
 ```
@@ -280,11 +310,21 @@ Workflow({ scriptPath: ".../references/workflow-template.js",
            args: { prompt, root, workingBranch, validate, hardRules, goLive,
                    planHarness, planReview, buildHarness, taskReview, implReview,
                    auditScriptPath, availableAgents, allowGeneralFallback,
-                   planPath, kiroModel } })   // planPath → RESUME at build; kiroModel → kiro model (default latest Opus, claude-opus-4.8)
+                   planPath, kiroModel,
+                   workflowId, statusFile, trackStatus } })   // planPath → RESUME at build; kiroModel → kiro model
+                                                              // (default latest Opus); workflowId/statusFile →
+                                                              // live .ulpi/workflows/<id>.json (trackStatus:false disables)
 ```
+
+**After launch, stamp the run id.** The Workflow tool returns a `runId` (`wf_…`) immediately (it runs in
+the background). Write `runId` and the exact `resume` command into the status file via Bash+jq, e.g.
+`jq '. + {runId:"<runId>", resume:"Workflow({scriptPath, resumeFromRunId:\"<runId>\", args:{…}})", status:"running"}'`
+— this makes the file a self-describing resume pointer that survives across sessions. (`wf-status.mjs`
+matches a run to this file by `runId`.)
 
 **Resuming?** Pass `planPath` (or `plan`) instead of relying on `prompt`/`planHarness`/`planReview` —
 those are ignored when a plan is supplied. The Workflow loads the plan, validates it, and starts at build.
+Re-pass the SAME `workflowId`/`statusFile` so the resumed run keeps updating the same status file.
 
 `mapRefresh` is deliberately NOT in `args` — it's the only intake answer the Workflow doesn't run.
 The map refresh regenerates `CLAUDE.md` from the FINISHED code, so the skill runs it itself in Phase 3
@@ -328,14 +368,19 @@ The Workflow then executes the playbook in one pass, running each gate at the le
   finders → dedup → dual-lens verify → critic — ∥ a second-harness audit lane; its findings become
   `openRegister`.
 
-Watch progress via `/workflows`. To iterate on the script, edit the saved `scriptPath` the tool
-returns and re-invoke with `{scriptPath}` (and `resumeFromRunId` to reuse cached agent results).
-**On any resume, re-pass the SAME `args` object** — `resumeFromRunId` reuses cached *agent* results but
-the script re-executes from the top, so omitting `args` empties `CFG` and the script hard-throws on the
-`FILL:` guard. Always include the full `args` object you launched with.
+Watch progress three ways: the `/workflows` panel (live agent tree), the **status file**
+(`cat <root>/.ulpi/workflows/<id>.json` — overall status, per-phase, per-task), or the bundled reader
+`node <skill-dir>/helpers/wf-status.mjs` (reconstructs per-task status straight from the run's journal —
+works even mid-flight and even if status tracking is off). See `references/status-tracking.md`. To iterate
+on the script, edit the saved `scriptPath` the tool returns and re-invoke with `{scriptPath}` (and
+`resumeFromRunId` to reuse cached agent results). **On any resume, re-pass the SAME `args` object** —
+`resumeFromRunId` reuses cached *agent* results but the script re-executes from the top, so omitting `args`
+empties `CFG` and the script hard-throws on the `FILL:` guard. Always include the full `args` object you
+launched with (including `workflowId`/`statusFile`).
 
 **Success criteria**: The Workflow runs to completion and returns
-`{ converged, ranReal, plan, planSupplied, build, openRegister, missingAgents, reviewConfig, noReviewGate }`.
+`{ converged, ranReal, plan, planSupplied, build, openRegister, missingAgents, reviewConfig, noReviewGate,
+workflowId, statusFile }`.
 
 ## Phase 3 — Report and escalate
 
@@ -360,14 +405,29 @@ Read the Workflow result:
   **hand-fix**, or **accept-with-risk**. The workflow does not loop on its own; never represent open
   findings as clean.
 
+The Workflow already wrote the final state into `<root>/.ulpi/workflows/<id>.json` (`status` =
+`done`/`needs_fix`/`aborted`, per-task outcome, `openRegister`). Read it to enrich the report and tell the
+user where it lives — it is the durable record of this run. If a run died mid-flight (no final write),
+refresh the file from the journal with `node <skill-dir>/helpers/wf-status.mjs --write` before reporting.
+
+**Live status, stop & resume** — three verbs, all backed by the status file + run journal:
+- **status** → `cat <root>/.ulpi/workflows/<id>.json` (or `node <skill-dir>/helpers/wf-status.mjs`) — at a
+  glance: overall status, which phase, and each task's state (pending → in_progress → dev_done →
+  integrated → passed/blocked).
+- **stop** → `TaskStop` the run, or the `/workflows` panel. Nothing is lost — the journal caches every
+  finished agent.
+- **resume** → re-invoke `Workflow({ scriptPath, resumeFromRunId: "<runId>", args: {…same args…} })`
+  (the `resume` command is stored in the status file). Cached agents return instantly; only
+  unfinished/conflicted tasks re-run. Re-pass `workflowId`/`statusFile` so it keeps the same file.
+
 **Then, if the user chose a project-map refresh at intake AND the run was real (`ranReal`, not
 aborted), run it last** — invoke the chosen skill (`map-project` or `map-project-monorepo`) so the
 `CLAUDE.md` context map reflects the code the build just landed. Skip it on an aborted/false-clean run
 (there's nothing new to map). This is the final step, after reporting.
 
 **Success criteria**: Either the enabled gates are genuinely clean (caveated by `reviewConfig` /
-`noReviewGate`), or the user is handed an honest list of what still blocks plus next moves; and the
-project map is refreshed if requested.
+`noReviewGate`), or the user is handed an honest list of what still blocks plus next moves; the durable
+status file reflects the final state; and the project map is refreshed if requested.
 
 ## Guardrails
 
@@ -393,6 +453,15 @@ project map is refreshed if requested.
   checkouts (at preflight, after each integrate, and at end), and the integrate validate must never
   scan `.claude/worktrees/**` or sibling agent dirs. If a run's gate fails on files outside the task's
   scope, suspect leftover worktrees before suspecting the code.
+- Per-task review is slice-scoped, not an end-state gate: a per-task BLOCK is valid only for a defect
+  INSIDE that task's writeScope. An unmet whole-codebase invariant a LATER task owns (legacy path not yet
+  removed, route/link/consumer not yet built) is an OBSERVATION attributed to that task — never a blocker
+  on the current slice, and never fed to the fix loop. The end-state is enforced by impl review (step 12)
+  + the integrate workspace validate. When triaging a noisy "blocked task" count, check whether the
+  blocks are end-state gaps owned elsewhere before treating the slice as broken.
+- Status tracking is non-fatal observability: a failed `.ulpi/workflows/<id>.json` write is logged and
+  ignored, never blocking the build. Never gate delivery on a status write, and never report a run as
+  failed solely because its status file is stale — reconstruct from the journal (`wf-status.mjs`) instead.
 
 ## When To Load References
 
@@ -410,6 +479,10 @@ project map is refreshed if requested.
 - `references/playbook-state.md`
   The single-pass state machine, master TodoWrite shape, finding schema + dedup, the Verify phase, and
   the clean-vs-feedback decision (fix rounds are user-driven, not automatic).
+- `references/status-tracking.md`
+  The live status file (`.ulpi/workflows/<id>.json`) schema + lifecycle, who writes it when, the three
+  verbs (status / stop / resume), and the `helpers/wf-status.mjs` journal reader. Load when wiring the
+  launch/report status writes or debugging a run's progress.
 
 ## Output Contract
 
