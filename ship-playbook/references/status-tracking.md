@@ -110,6 +110,36 @@ it reconstructs per-task status from the journal and merges it over the durable 
 the skill-written `config`/`prompt`/`phases` — use it when a run had tracking off, or died before its final
 write.
 
+## Backfill a run that predates v1.5.0 (incl. an in-flight one)
+
+A run launched with an older ship-playbook never wrote a status file. Build one from its journal:
+
+```bash
+cd <the repo where the run is building>
+node <skill-dir>/helpers/wf-status.mjs --write           # newest run for this project
+node <skill-dir>/helpers/wf-status.mjs --write <runId>   # a specific run
+```
+
+This recovers, **from the journal**: the plan name + path, the working branch (from the preflight result),
+the full task list with each task's title/agent/branch + current status, the layer count, and live counts
++ merge conflicts. It writes `./.ulpi/workflows/<runId>.json`, marked `partial: true`.
+
+**The one thing the journal can't give: the launch args.** Gate config (`planReview`/`taskReview`/…),
+`hardRules`, `validate`, and the original `prompt` were *inputs to the script*, not agent results, so they
+are not in the journal. Only the session that launched the run knows them. Supply them to complete the
+resume recipe:
+
+```bash
+node <skill-dir>/helpers/wf-status.mjs --write <runId> \
+  --args '{"planReview":"skip","buildHarness":"native","taskReview":"codex","implReview":"codex","validate":"pnpm -w typecheck && pnpm -w lint && pnpm -w test"}'
+```
+
+The backfilled file's `.resume` is **planPath-based** (the plan already exists on disk, so resume adopts it
+and skips re-planning — fewer inputs needed): `Workflow({ scriptPath, resumeFromRunId, args:{ planPath,
+workingBranch, root, …your --args… } })`. Resuming an old run with the *current* template is fine and even
+beneficial — `resumeFromRunId` replays every cached agent by content hash; only uncached/changed calls
+re-run, so the slice-scoped reviewer applies to the work that's left.
+
 ## Guardrails
 
 - Status tracking never blocks delivery. A failed write is logged and ignored.

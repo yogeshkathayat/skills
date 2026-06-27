@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.5.0
+version: 1.5.1
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -419,6 +419,11 @@ refresh the file from the journal with `node <skill-dir>/helpers/wf-status.mjs -
 - **resume** → re-invoke `Workflow({ scriptPath, resumeFromRunId: "<runId>", args: {…same args…} })`
   (the `resume` command is stored in the status file). Cached agents return instantly; only
   unfinished/conflicted tasks re-run. Re-pass `workflowId`/`statusFile` so it keeps the same file.
+
+**A run launched before v1.5.0 (no status file)?** Backfill one from its journal:
+`node <skill-dir>/helpers/wf-status.mjs --write [<runId>]` — recovers the plan, branch, task list + status,
+and conflicts. The journal has no launch args, so add `--args '{…gate config + validate…}'` (which only the
+launching session knows) to complete the `resume` recipe. See `references/status-tracking.md`.
 
 **Then, if the user chose a project-map refresh at intake AND the run was real (`ranReal`, not
 aborted), run it last** — invoke the chosen skill (`map-project` or `map-project-monorepo`) so the

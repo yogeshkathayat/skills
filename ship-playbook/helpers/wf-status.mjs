@@ -16,10 +16,13 @@
 //   node wf-status.mjs --list          # every run for this project + one-line state
 //   node wf-status.mjs --all           # don't scope to cwd — scan all projects
 //   node wf-status.mjs --json [runId]  # machine-readable reconstruction
-//   node wf-status.mjs --write [path]  # materialize/refresh a durable snapshot (default
-//                                      #   ./.ulpi/workflows/<runId>.json), merging journal-derived
-//                                      #   task status over any skill-written fields. Use when a run
-//                                      #   had status tracking off, or to refresh on demand.
+//   node wf-status.mjs --write [path]  # BACKFILL the durable .ulpi/workflows/<runId>.json from the
+//                                      #   journal — for a run that predates v1.5.0 (incl. an in-flight
+//                                      #   one) that never wrote its own status file. Recovers plan
+//                                      #   name/path, working branch, the full task list + per-task
+//                                      #   status, layers and counts. The journal has NO launch args, so
+//                                      #   add  --args '{"planReview":"skip","taskReview":"codex",…}'  to
+//                                      #   fold in the gate config and complete the resume recipe.
 //
 // Stop / resume are NOT scriptable (they go through the Workflow tool / the /workflows UI):
 //   stop   → ask Claude to TaskStop the run, or use the /workflows panel
@@ -72,14 +75,17 @@ function parseJournal(journalPath) {
   const started = lines.filter(l => l.type === 'started').length;
   const results = lines.filter(l => l.type === 'result');
   let planTasks = [];
+  let plan = null;                // the full plan-adoption result {planName, planPath, tasks[], layers[][]}
+  let preflight = null;           // the git-readiness result {isGitRepo, currentBranch, workingBranchExists}
   const engineer = {};            // taskId -> latest engineer status ('passed' | 'blocked')
   const mergedSet = new Set();    // taskIds confirmed merged onto the working branch
   let reviews = 0, integrates = 0; const conflicts = [];
   for (const e of results) {
     const r = e.result;
     if (!r || typeof r !== 'object') continue;
-    if (Array.isArray(r.tasks) && r.tasks.length && r.tasks[0] && r.tasks[0].id) planTasks = r.tasks.map(t => t.id);
+    if (Array.isArray(r.tasks) && r.tasks.length && r.tasks[0] && r.tasks[0].id) { planTasks = r.tasks.map(t => t.id); plan = r; }
     else if (r.taskId && r.status) engineer[r.taskId] = r.status;
+    else if ('isGitRepo' in r) preflight = r;
     else if ('merged' in r) {
       integrates++;
       for (const b of (r.merged || [])) { const m = (String(b).match(/TASK-\d+/) || [])[0]; if (m) mergedSet.add(m); }
@@ -87,7 +93,7 @@ function parseJournal(journalPath) {
     } else if ('verdict' in r) reviews++;
   }
   return { started, resultCount: results.length, inFlight: started - results.length,
-           planTasks, engineer, mergedSet, reviews, integrates, conflicts };
+           planTasks, plan, preflight, engineer, mergedSet, reviews, integrates, conflicts };
 }
 
 // buckets derived from the reconstruction
@@ -175,29 +181,77 @@ if (!target) { console.error('run not found: ' + positional[0]); process.exit(1)
 const parsed = parseJournal(target.journal);
 
 if (has('--write')) {
-  // materialize/refresh a durable snapshot from the journal, merging over any skill-written fields.
+  // BACKFILL: build/refresh a durable .ulpi/workflows/<run>.json from the journal — for a run that
+  // predates v1.5.0 (incl. an in-flight one) and never wrote its own status file. Recovers everything the
+  // journal holds (plan name/path, working branch, the full task list + per-task status, layers, counts)
+  // and merges it over any existing file without clobbering skill-written fields. What the journal does
+  // NOT hold — the LAUNCH ARGS (gate config, hardRules, validate, the original prompt) were inputs to the
+  // script, not agent results — so those can't be recovered here; pass them with --args '<json>' to
+  // complete the resume recipe (the session that launched the run knows them).
   const b = buckets(parsed);
   const statusByTask = {};
   for (const t of b.merged) statusByTask[t] = { status: 'integrated' };
   for (const t of b.queued) statusByTask[t] = { status: 'dev_done' };
   for (const t of b.reviewFix) statusByTask[t] = { status: 'reviewing' };
   for (const t of b.notStarted) statusByTask[t] = { status: 'pending' };
-  // explicit path = first positional that isn't the runId, else the conventional durable path
+  // task metadata (title/agent/branch) straight from the plan-adoption result
+  const taskMeta = {};
+  for (const t of (parsed.plan && parsed.plan.tasks) || [])
+    taskMeta[t.id] = { title: t.title || '', agent: t.agent || '', branch: `wf/build/${t.id}` };
+  const tasksOut = {};
+  for (const id of new Set([...Object.keys(taskMeta), ...Object.keys(statusByTask)]))
+    tasksOut[id] = { ...(taskMeta[id] || {}), ...(statusByTask[id] || {}) };
+
+  // optional --args '<json>' = the original launch args (gate config etc.) to complete the recipe
+  let argsOverride = null;
+  const ai = ARGV.indexOf('--args');
+  if (ai >= 0 && ARGV[ai + 1]) { try { argsOverride = JSON.parse(ARGV[ai + 1]); } catch { console.error('--args: not valid JSON, ignoring'); } }
+
+  const allIntegrated = b.total > 0 && b.merged.length === b.total;
+  const planName = parsed.plan && parsed.plan.planName;
+  const planPath = parsed.plan && parsed.plan.planPath;
+  const branch = (parsed.preflight && parsed.preflight.currentBranch) || (argsOverride && argsOverride.workingBranch) || null;
+  const phases = {
+    plan: { status: parsed.plan ? 'done' : 'unknown' },
+    plan_review: { status: 'unknown' },
+    build: (parsed.integrates || Object.keys(parsed.engineer).length)
+      ? { status: allIntegrated ? 'done' : 'in_progress', integrated: b.merged.length, total: b.total }
+      : { status: 'unknown' },
+    impl_review: { status: 'unknown' },
+    verify: { status: 'unknown' },
+    audit: { status: 'unknown' },
+  };
+  // a planPath-based resume needs the fewest inputs (the plan already exists on disk → no re-plan)
+  const resumeArgs = { ...(argsOverride || {}), ...(planPath ? { planPath } : {}), ...(branch ? { workingBranch: branch } : {}), root: process.cwd() };
+  const resume = `Workflow({ scriptPath: "<path-to>/ship-playbook/references/workflow-template.js", resumeFromRunId: "${target.run}", args: ${JSON.stringify(resumeArgs)} })`;
+
   const explicit = positional.find(a => a !== target.run && /[\/.]/.test(a));
   const outPath = explicit || join(process.cwd(), '.ulpi', 'workflows', `${target.run}.json`);
   let base = {};
   if (existsSync(outPath)) { try { base = JSON.parse(readFileSync(outPath, 'utf8')); } catch { base = {}; } }
   const merged = {
-    ...base,
+    schemaVersion: 1,
+    workflowId: base.workflowId || target.run,
     runId: target.run,
     reconstructedFromJournal: true,
-    tasks: { ...(base.tasks || {}), ...mergeTaskStatus(base.tasks || {}, statusByTask) },
+    partial: true,                // phases/overall + launch args are partly inferred — see `note`
+    note: 'Backfilled from the run journal. The journal has no launch args, so gate config / hardRules / validate / prompt are NOT recovered — pass them via --args to complete the resume recipe.',
+    status: base.status || (parsed.inFlight > 0 ? 'running' : 'inactive'),
+    root: base.root || process.cwd(),
+    workingBranch: base.workingBranch || branch || null,
+    config: { ...(base.config || {}), ...((argsOverride && pickConfig(argsOverride)) || {}) },
+    plan: base.plan || (planName ? { name: planName, path: planPath || null, taskCount: b.total, layers: (parsed.plan.layers || []).length } : null),
+    phases: { ...phases, ...(base.phases || {}) },
+    resume: (argsOverride || !base.resume) ? resume : base.resume,   // regenerate when args are supplied
+    tasks: { ...(base.tasks || {}), ...mergeTaskStatus(base.tasks || {}, tasksOut) },
     journal: { started: parsed.started, done: parsed.resultCount, running: parsed.inFlight, reviews: parsed.reviews, integrates: parsed.integrates, conflicts: parsed.conflicts },
     updatedAt: new Date().toISOString(),
   };
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, JSON.stringify(merged, null, 2) + '\n');
-  console.error(`wrote ${outPath} (${b.merged.length}/${b.total || '?'} integrated)`);
+  console.error(`wrote ${outPath}`);
+  console.error(`  plan: ${planName || '(unknown)'} · branch: ${branch || '(unknown)'} · ${b.merged.length}/${b.total || '?'} integrated · ${parsed.inFlight} running`);
+  if (!argsOverride) console.error('  note: launch args (gate config/hardRules/validate/prompt) NOT in the journal — add --args \'{…}\' for a complete resume recipe.');
   process.exit(0);
 }
 
@@ -217,6 +271,14 @@ if (has('--json')) {
 }
 
 render(target.run, parsed, statusFileForRun(target.run));
+
+// the gate-config subset of a launch-args object (for the durable file's `config`)
+function pickConfig(a) {
+  const out = {};
+  for (const k of ['planHarness', 'planReview', 'buildHarness', 'taskReview', 'implReview', 'goLive'])
+    if (a[k] !== undefined) out[k] = a[k];
+  return out;
+}
 
 // keep a skill-written richer status (e.g. 'passed'/'blocked' with fixes) when the journal only knows a
 // coarser bucket — don't downgrade a known-good task back to 'reviewing'.
