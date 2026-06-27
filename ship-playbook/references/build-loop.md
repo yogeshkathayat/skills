@@ -22,6 +22,28 @@ each of those agents is briefed with.
 > agent to emit that shape. Same contract, lowercased; edit the schema in `workflow-template.js`,
 > not this prose, if the fields change.
 
+## Follow the DAG — dependencies decide layering (do NOT retry around it)
+
+The build integrates **layer-by-layer with a barrier**, so a task only ever sees its dependencies if the
+PLAN placed them in an earlier layer. This makes dependency ordering load-bearing, not advisory:
+
+- Every task carries `dependsOn` = the ids of tasks whose output it needs (a migration/table, a
+  catalog/registry row, a route or link target, an exported symbol it imports, a fixture, or a locked
+  test another task grows).
+- `layers[][]` MUST be a **topological order** of `dependsOn`: a task appears strictly AFTER everything it
+  depends on. The build's `validatePlan` **aborts** a plan whose layers violate this (e.g. `TASK-053`
+  scheduled in the same/earlier layer than the `TASK-015` catalog rows + `TASK-054` registry test it
+  needs) — it refuses to build on a base where required upstream isn't integrated, rather than letting the
+  engineer fail with "required upstream not integrated" and then thrashing.
+- Each task's `validate` is **slice-scoped** — greenable once that slice plus its declared deps integrate,
+  never a whole-suite/e2e that only passes at end-state.
+- If two pieces **cannot each validate independently** (a registry and the locked test that asserts that
+  exact registry mutually block), they are ONE unit — the plan must merge them, not split them.
+
+The correct fix for a build task blocked on un-integrated upstream is to fix the **plan** (its `dependsOn`
+edges / layer order), caught by plan review and enforced by `validatePlan` — NOT a runtime retry that
+papers over a mis-ordered DAG.
+
 ## Layer-by-layer execution
 
 Process `parallelLayers` in order. A layer's tasks may run concurrently ONLY when their `writeScope`

@@ -231,6 +231,7 @@ const PLAN = {
           id: { type: 'string' }, agent: { type: 'string' }, reviewer: { type: 'string' },
           title: { type: 'string' }, description: { type: 'string' },
           writeScope: { type: 'array', items: { type: 'string' } },
+          dependsOn: { type: 'array', items: { type: 'string' } },   // ids of tasks whose output this needs; layers MUST place those earlier
           acceptance: { type: 'array', items: { type: 'string' } },
           validate: { type: 'string' },
           stackSkill: { type: ['string', 'null'] },   // '/nextjs' | '/laravel' | '/rust' | null
@@ -335,9 +336,24 @@ Ground every path in the real repo at ${ROOT}; never invent files. Decompose int
 files each). For EVERY task assign an engineer \`agent\` and set \`reviewer\` = that agent name +
 '-reviewer'. ${AVAILABLE_AGENTS ? `Choose \`agent\` ONLY from the agents that exist in THIS environment: ${AVAILABLE_AGENTS.join(', ')}. Pick the closest specialist; if none fits use 'general-purpose'. Set \`reviewer\` to the agent's '-reviewer' ONLY if that exact name is also in that list, otherwise 'general-purpose'. Do NOT invent agent names outside that list.` : `Prefer the closest specialist over general-purpose.`} Set \`stackSkill\` to the slash-skill to enforce for the
 task's stack ('/nextjs','/laravel','/rust',…) or null. Give each task writeScope, 2–3 acceptance
-criteria (≥1 failure/edge), and a validate command. Write .ulpi/plans/<name>.md + .json (JSON is the
-source of truth; render MD from it). Return planName, planPath, tasks[], and layers[][] (the parallel
-execution layers, task ids).`
+criteria (≥1 failure/edge), and a validate command.
+DEPENDENCIES & LAYERING ARE LOAD-BEARING — the build integrates layer-by-layer with a barrier, so a task
+that runs before the work it needs is integrated builds on a BROKEN base and fails. Therefore:
+- Set \`dependsOn\` on EVERY task to the ids of tasks whose output it needs: a migration/table, a
+  catalog/registry row, a route or link target, an exported symbol it imports, a fixture, or a locked
+  test another task grows. Be exhaustive — a missing edge is what causes "required upstream not integrated"
+  build failures.
+- \`layers[][]\` MUST be a valid TOPOLOGICAL ORDER of \`dependsOn\`: every task appears in a layer strictly
+  AFTER all tasks in its \`dependsOn\`. Never place a task in the same or an earlier layer than something it
+  depends on.
+- Each task's \`validate\` must exercise ONLY that task's own slice — NOT a whole-suite/e2e that can't pass
+  until every task lands. A slice's validate must be greenable the moment that slice (plus its declared
+  deps) is integrated.
+- If two pieces CANNOT each validate independently — neither's validate passes until both land (e.g. a
+  registry and the locked test that asserts that exact registry, which mutually block) — they are ONE
+  unit: MERGE them into a single task. Do not split work that can't be validated separately.
+Write .ulpi/plans/<name>.md + .json (JSON is the source of truth; render MD from it). Return planName,
+planPath, tasks[] (incl. dependsOn), and layers[][] (a topological order of the parallel execution layers).`
 }
 function founderBrief(plan, who) {
   const lens = who === 'native' ? 'as native claude' : `via the ${who} harness (READ-ONLY, do NOT edit)`
@@ -345,6 +361,14 @@ function founderBrief(plan, who) {
 codebase at ${ROOT}. Verify: every filesToModify path exists; filesToCreate has a creator; markdown↔
 JSON task ids/paths/deps agree; reuse claims are real; scope/mode fits; the dependency graph is
 acyclic; each task has a failure/edge acceptance criterion; no phantom paths. Hard rules: ${HARD_RULES}.
+DAG ORDERING (the build integrates layer-by-layer, so mis-ordering = build-time failures) — BLOCK on:
+- any task whose acceptance criteria or \`validate\` need state ANOTHER task produces (a table/migration,
+  catalog/registry row, route, exported symbol, fixture, or a test that task grows) without that task in
+  its \`dependsOn\` AND in a strictly EARLIER layer;
+- \`layers[][]\` not being a valid topological order of \`dependsOn\` (a task at/before something it depends on);
+- a \`validate\` that is a whole-suite/e2e which cannot pass until every task lands — validate must be
+  slice-scoped (greenable once this slice + its declared deps are integrated);
+- two tasks split such that NEITHER can validate without the other (mutually blocking) — they must be merged.
 Classify findings BLOCK/CONCERN/OBSERVATION with file:line evidence; verdict approve/revise/reject.`
 }
 function planFixBrief(plan, findings) {
@@ -649,14 +673,32 @@ function validatePlan(p) {
   if (Array.isArray(p.layers) && p.layers.length) {
     const unknown = [...new Set(p.layers.flat().filter(id => !ids.has(id)))]
     if (unknown.length) return `plan layers reference unknown task ids: ${unknown.join(', ')}`
+    // DAG ordering: the build integrates layer-by-layer, so every task's dependencies MUST sit in a
+    // STRICTLY earlier layer. A task scheduled at/before a dep builds on a base where that dep isn't
+    // integrated and fails (e.g. "required upstream not integrated"). Reject such a plan rather than
+    // building it on a broken base — follow the DAG, don't paper over it at runtime.
+    const layerOf = new Map()
+    p.layers.forEach((layer, i) => layer.forEach(id => { if (!layerOf.has(id)) layerOf.set(id, i) }))
+    const misordered = []
+    for (const t of p.tasks) {
+      if (!t || !Array.isArray(t.dependsOn) || !t.dependsOn.length) continue
+      const ti = layerOf.get(t.id)
+      if (ti == null) continue
+      for (const dep of t.dependsOn) {
+        if (!ids.has(dep)) { misordered.push(`${t.id} dependsOn "${dep}" which is not a task in the plan`); continue }
+        const di = layerOf.get(dep)
+        if (di == null || di >= ti) misordered.push(`${t.id} (layer ${ti}) depends on ${dep} (${di == null ? 'not scheduled in any layer' : 'layer ' + di}) — a dependency MUST integrate in an earlier layer`)
+      }
+    }
+    if (misordered.length) return `plan DAG is mis-ordered — ${misordered.length} task(s) are scheduled before their dependencies, so they would build on a base where required upstream isn't integrated: ${misordered.slice(0, 6).join('; ')}${misordered.length > 6 ? ` … (+${misordered.length - 6} more)` : ''}. Fix the layers (topological order) or the dependsOn edges and re-plan.`
   }
   return null
 }
 // RESUME loader: an agent reads the existing plan file (the sandbox can't), validates it against the
 // real repo, normalizes it, and returns the PLAN object — it must NOT re-plan.
 const loadPlanBrief = (path) => `Load an EXISTING ship-playbook plan to RESUME from at the build phase — do NOT re-plan or invent tasks.
-Read the plan at ${path} in ${ROOT} (if it is a .md, also read its sibling .json — the JSON is the source of truth). Return it as structured output: planName, planPath, tasks[] (each: id, agent, reviewer, title, writeScope[], acceptance[], validate, stackSkill|null) and layers[][] (the parallel execution layers as task-id arrays).
-Normalize, don't redesign: if a task has no reviewer, set it to its agent name + '-reviewer'; if layers are absent, derive them from task dependencies (else one layer with every task id). Return exactly the tasks the file defines. If the file is missing or has no tasks, return an empty tasks[].`
+Read the plan at ${path} in ${ROOT} (if it is a .md, also read its sibling .json — the JSON is the source of truth). Return it as structured output: planName, planPath, tasks[] (each: id, agent, reviewer, title, writeScope[], dependsOn[], acceptance[], validate, stackSkill|null) and layers[][] (the parallel execution layers as task-id arrays).
+Normalize, don't redesign: if a task has no reviewer, set it to its agent name + '-reviewer'; preserve each task's dependsOn as written (else []); if layers are absent, derive them as a topological order from dependsOn (else one layer with every task id). Return exactly the tasks the file defines. If the file is missing or has no tasks, return an empty tasks[].`
 
 // ── the playbook: ONE pass — (write plan → plan review) OR resume → build → impl review → audit → return ──
 // NO automatic recursion. The verified findings are RETURNED as feedback; the skill presents them and

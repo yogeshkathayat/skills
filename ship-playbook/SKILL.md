@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.5.1
+version: 1.6.0
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -458,6 +458,16 @@ status file reflects the final state; and the project map is refreshed if reques
   checkouts (at preflight, after each integrate, and at end), and the integrate validate must never
   scan `.claude/worktrees/**` or sibling agent dirs. If a run's gate fails on files outside the task's
   scope, suspect leftover worktrees before suspecting the code.
+- Follow the DAG; never build a task before its dependencies are integrated. The build integrates
+  layer-by-layer with a barrier, so correctness depends on the PLAN ordering tasks properly: every task's
+  `dependsOn` must be complete and `layers` must be a topological order (each task strictly after all it
+  depends on). The plan phase sets `dependsOn`, plan review BLOCKs an incomplete/mis-ordered graph, and
+  the build's `validatePlan` ABORTS a plan whose layers violate `dependsOn` rather than building on a
+  broken base. A task that needs another's output (catalog/registry row, migration, route, exported
+  symbol, a test another task grows) and would run first is a PLAN defect — fix the ordering, never paper
+  over it with a runtime retry. If two pieces can't each validate independently, they must be ONE task.
+  Each task's `validate` must be slice-scoped (greenable once that slice + its deps integrate), never a
+  whole-suite e2e that only passes at end-state.
 - Per-task review is slice-scoped, not an end-state gate: a per-task BLOCK is valid only for a defect
   INSIDE that task's writeScope. An unmet whole-codebase invariant a LATER task owns (legacy path not yet
   removed, route/link/consumer not yet built) is an OBSERVATION attributed to that task — never a blocker
