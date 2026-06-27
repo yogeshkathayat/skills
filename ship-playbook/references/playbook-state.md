@@ -96,7 +96,9 @@ back to the user as a real defect. The survivors are `openRegister`.
 ## Clean vs feedback
 
 - **Clean** = no verified BLOCK/CONCERN finding survives. Remaining OBSERVATIONs are listed in the
-  report, not acted on. If `goLive`, the audit then runs; a clean audit → DONE.
+  report, not acted on. If `goLive`, the audit then runs; a clean audit → DONE. On DONE (converged), the
+  workflow's LAST step ARCHIVES the delivered plan to `.ulpi/plans/done/` (returns `planArchived:true`) so
+  the active plans dir holds only in-flight work — skipped on a `needs_fix` run (a fix round may reuse it).
 - **Feedback** = at least one verified BLOCK/CONCERN. The workflow RETURNS them in `openRegister` and
   STOPS. The skill presents them (file:line, issue, suggested fix, which gate) and offers the user:
   run a fix round (re-invoke with the findings as the prompt), hand-fix, or accept-with-risk. The

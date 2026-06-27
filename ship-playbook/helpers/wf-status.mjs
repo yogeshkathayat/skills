@@ -23,20 +23,61 @@
 //                                      #   status, layers and counts. The journal has NO launch args, so
 //                                      #   add  --args '{"planReview":"skip","taskReview":"codex",…}'  to
 //                                      #   fold in the gate config and complete the resume recipe.
+//   node wf-status.mjs --resume [runId]# EMIT the exact Workflow({scriptPath, args}) call to RESUME this
+//                                      #   run: reads the durable status file's launchArgs and re-fires
+//                                      #   them with planPath + checkpointResume:true + the same statusFile.
+//                                      #   Durable, session-independent (no resumeFromRunId). Claude pastes
+//                                      #   the emitted JSON into the Workflow tool; the run skips done tasks.
 //
-// Stop / resume are NOT scriptable (they go through the Workflow tool / the /workflows UI):
-//   stop   → ask Claude to TaskStop the run, or use the /workflows panel
-//   resume → ask Claude to Workflow({scriptPath, resumeFromRunId:"<runId>", args:{…}}) — cached
-//            agents return instantly; only unfinished/edited tasks re-run. The durable status file
-//            stores the exact resume command under `.resume`.
+// Stop:  ask Claude to TaskStop the run, or use the /workflows panel. Nothing is lost — the status file
+//        and journal both persist what's done; resume rebuilds only what's left.
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 
 const ARGV = process.argv.slice(2);
 const has = (f) => ARGV.includes(f);
 const positional = ARGV.filter(a => !a.startsWith('--'));
+
+// ── --resume: emit the exact Workflow() call to resume a run from its durable status file ──
+// Self-contained: sources `<cwd>/.ulpi/workflows/<id>.json` directly (kept current by the run's statusStep
+// writers), needs NO journal. Re-fires the stored launchArgs with planPath (skip re-planning) +
+// checkpointResume:true (skip done tasks) + the same statusFile. Durable + session-independent.
+if (has('--resume')) {
+  const all = findStatusFiles();
+  const durable = positional[0]
+    ? statusFileForRun(positional[0])
+    : all.slice().sort((a, b) => String((b.data && b.data.updatedAt) || '').localeCompare(String((a.data && a.data.updatedAt) || '')))[0];
+  if (!durable || !durable.data) {
+    console.error(`no .ulpi/workflows/*.json status file found${positional[0] ? ` for ${positional[0]}` : ` in ${process.cwd()}`} — run \`--write [runId]\` to backfill one from the journal first.`);
+    process.exit(1);
+  }
+  const d = durable.data;
+  const la = d.launchArgs || {};
+  const args = {
+    ...(d.config || {}),                                          // harnesses + goLive (fallback)
+    prompt: d.prompt, root: d.root, workingBranch: d.workingBranch,
+    ...la,                                                        // launchArgs authoritative (validate, hardRules, …)
+    planPath: (d.plan && d.plan.path) || la.planPath,            // resume AT BUILD — skip re-planning
+    statusFile: durable.path,
+    workflowId: d.workflowId || d.runId,
+    checkpointResume: true,
+  };
+  for (const k of Object.keys(args)) if (args[k] === undefined) delete args[k];
+  const scriptPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'references', 'workflow-template.js');
+  // "what's left" from the durable file's OWN per-task statuses (no journal needed)
+  const st = Object.values(d.tasks || {}).map(t => t && t.status).filter(Boolean);
+  const c = (s) => st.filter(x => x === s).length;
+  const done = c('passed');
+  const onBr = c('integrated') + c('reviewing') + c('fixing') + c('blocked');
+  console.error(`resume ${d.workflowId || d.runId || ''}: ${done} passed (skip) · ${onBr} on-branch (re-review, no rebuild) · ${Math.max(0, st.length - done - onBr)} to (re)build  [${st.length} tasks]`);
+  if (!Object.keys(la).length) console.error('  WARNING: no launchArgs in the status file — validate/hardRules may be MISSING; verify the args before launching (runs launched by v1.7.0+ store them).');
+  if (!args.planPath) console.error('  WARNING: no plan path recorded — resume will RE-PLAN (the run was interrupted before a plan landed).');
+  console.log(JSON.stringify({ scriptPath, args }, null, 2));
+  process.exit(0);
+}
 
 // ── locate workflow runs under ~/.claude/projects/<slug>/<session>/subagents/workflows ──
 const projectsRoot = join(homedir(), '.claude', 'projects');

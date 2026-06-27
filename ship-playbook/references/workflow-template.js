@@ -116,6 +116,19 @@ function makeGate(limit) {
 }
 const buildGate = makeGate(MAX_BUILD_PARALLEL)   // gates build/fix engineers (buildSpawn)
 const agentGate = makeGate(MAX_PARALLEL)         // gates reviewers (taskReviewSpawn) + verify lenses
+// MERGE LOCK — a promise-chain mutex serializing git merges onto the shared WORKING_BRANCH. The per-task
+// pipeline runs many tasks concurrently, but each task's integrate (and fix re-integrate) merges the same
+// branch; concurrent merges would race the git index. mergeLock(fn) runs fn only after the previous
+// holder settles, so merges happen strictly one-at-a-time while builds/reviews stay parallel.
+function makeLock() {
+  let tail = Promise.resolve()
+  return (fn) => {
+    const run = tail.then(fn, fn)            // run after the previous merge settles (success OR failure)
+    tail = run.then(() => {}, () => {})      // swallow so one failed merge doesn't break the chain
+    return run
+  }
+}
+const mergeLock = makeLock()
 // retrying wrapper for the NON-gated sequential agent() calls (plan, preflight, integrate, plan-fix,
 // cleanup, routed reviews). The gated fan-out calls already retry inside makeGate.
 const rAgent = (prompt, opts) => withRetry(() => agent(prompt, opts), opts && opts.label)
@@ -415,25 +428,59 @@ Make this pass: ${t.validate}. Then commit:
 Report taskId, status ('passed' only if ${t.validate} is green), validatePassed, filesTouched.
 Implement ONLY this task.`
 }
-function integrateBrief(branches) {
-  return `On ${WORKING_BRANCH} in ${ROOT}, integrate these task branches IN ORDER: ${branches.join(', ')}.
-Process them ONE AT A TIME — merge a branch, then IMMEDIATELY remove its worktree, then move to the
-next. For each branch:
-  1. \`git merge --no-edit <branch>\` (on conflict: \`git merge --abort\`, record it under conflicted[],
-     skip to the next branch — never force-resolve).
-  2. As soon as it merges, REMOVE its transient build worktree so it can't pollute anything: find the
-     path via \`git -C ${ROOT} worktree list --porcelain\`, \`git -C ${ROOT} worktree remove --force <path>\`,
-     then \`git -C ${ROOT} branch -D <branch>\`.
-Finish with \`git -C ${ROOT} worktree prune\` to clear stale admin entries.
-
-THEN run ${VALIDATE_ALL} once. The validate must cover ONLY the project at ${ROOT} — it must NOT scan
-\`.claude/worktrees/**\` or sibling agent dirs (\`.factory\`, \`.gemini\`, \`.opencode\`, \`.trae\`, \`.vibe\`).
-If the configured command would walk them (e.g. \`eslint .\` / \`tsc\` without excludes), restrict it to
-the project sources (add \`--ignore-pattern '.claude/**'\`, exclude in the tsconfig invocation, or scope
-to the changed paths) — leftover/transient worktrees must never fail the gate, and never relax any
-other lint/type rule to make it pass.
-
-Report merged[] and conflicted[] using the EXACT branch names listed above, verbatim (e.g. wf/build/TASK-001) — one entry per branch, in merged[] if it merged cleanly or conflicted[] if you aborted it. Also report validatePassed.`
+// merge ONE task branch onto the working branch — used by the per-task pipeline (under the merge lock).
+// Merge-only for the clean case: the engineer already validated its slice, and the FINAL workspace-validate
+// gate is the authoritative whole-tree check, so a clean merge does NOT re-run VALIDATE_ALL (a full
+// typecheck/lint per task would be brutal). On CONFLICT it does NOT just bail — it RESOLVES intentionally
+// (combine both sides, never drop either's contribution), then runs the task's own validate to confirm the
+// resolution is sound; it only aborts if the conflict genuinely can't be combined or validate still fails.
+function mergeBrief(t, branch) {
+  return `On ${WORKING_BRANCH} in ${ROOT}, merge the single task branch ${branch} (task ${t.id}: ${t.title || ''}).
+  0. IDEMPOTENCY (a prior attempt may have died AFTER side-effects under retry — handle both windows).
+     The check below is about THIS SPECIFIC branch (${branch}) — NEVER a task-id prefix (the original
+     task commit and a fix branch share the \`${t.id}:\` prefix, so an id-grep would wrongly skip a real
+     fix-branch merge and discard the fix). Do, in order:
+     a. \`git -C ${ROOT} merge --abort 2>/dev/null || true\` to clear any leftover in-progress merge
+        (MERGE_HEAD) — safe, as the slice is validated in its worktree and any resolution is re-derivable.
+     b. ALREADY-MERGED short-circuit for ${branch} SPECIFICALLY — treat as already merged (report
+        merged[]=[${branch}], skip the merge, run step 3 cleanup as a tolerant no-op) ONLY with POSITIVE
+        proof that THIS branch's tip is already on ${WORKING_BRANCH}: \`git -C ${ROOT} rev-parse --verify
+        ${branch}\` SUCCEEDS and \`git -C ${ROOT} merge-base --is-ancestor ${branch} ${WORKING_BRANCH}\`
+        SUCCEEDS. Do NOT use \`git log --grep="^${t.id}:"\` (matches sibling commits). If the branch ref is
+        GONE, do NOT assume it merged — fall through; step 1 will fail-CLOSED below.
+  1. \`git -C ${ROOT} checkout ${WORKING_BRANCH}\`, then \`git -C ${ROOT} merge --no-edit ${branch}\`.
+     - If it reports "Already up to date" → already merged (report merged[]=[${branch}], go to cleanup).
+     - If \`${branch}\` does NOT exist (\`fatal: ... not something we can merge\` / "merge: ${branch} - not
+       something we can merge") → do NOT report merged. Report merged[]=[] and conflicted[]=[${branch}]
+       (the branch isn't present and is not provably on ${WORKING_BRANCH}) — FAIL CLOSED so the task is
+       recorded not-on-branch (it rebuilds on resume), NEVER falsely marked integrated.
+     - If it reports "MERGE_HEAD exists / you have not concluded your merge", \`git -C ${ROOT} merge --abort\` and re-merge.
+  2. IF IT CONFLICTS — do NOT blindly abort. RESOLVE it intentionally, and VALIDATE BEFORE COMMITTING so a
+     broken resolution never lands on ${WORKING_BRANCH} (the merge stays in-progress — MERGE_HEAD present —
+     so \`git merge --abort\` is still valid if it fails):
+     - For each conflicted file, read BOTH sides (\`git -C ${ROOT} diff\`). The two sides are the
+       already-integrated work and ${t.id}'s changes; they are almost always ADDITIVE (e.g. both append a
+       row to a catalog/registry, both add an export). Combine them so NEITHER side's contribution is lost
+       — keep both additions; where the same line was edited, merge the SEMANTICS of both, never discard
+       one side. Resolve within ${t.id}'s scope (${(t.writeScope || []).join(', ')}) and the overlapping lines only.
+     - \`git -C ${ROOT} add -A\` to mark resolved, but do NOT commit yet. Then run \`${t.validate}\` on the
+       resolved (still-uncommitted) tree to confirm the resolution is sound. The validate must cover ONLY the
+       project at ${ROOT} — never scan \`.claude/worktrees/**\` or sibling agent dirs
+       (\`.factory\`,\`.gemini\`,\`.opencode\`,\`.trae\`,\`.kiro\`,\`.vibe\`); if the configured command would walk them
+       (e.g. \`eslint .\` / \`tsc\` without excludes), restrict it (add \`--ignore-pattern '.claude/**'\`, scope the
+       tsconfig invocation, or scope to ${t.id}'s writeScope) — a failure originating UNDER those transient
+       worktrees is NOT a resolution failure and must NOT trigger an abort.
+     - If \`${t.validate}\` passes → \`git -C ${ROOT} commit --no-edit\` to finalize, and report under merged[].
+     - ONLY if you cannot combine both sides without dropping work, OR \`${t.validate}\` genuinely fails (real
+       project errors, not worktree pollution) → \`git -C ${ROOT} merge --abort\` (valid — nothing was
+       committed) and report under conflicted[] (a real blocker needing attention — never force a destructive
+       or broken resolution, and never leave a broken merge committed on the branch).
+  3. On a clean merge / validated resolution / already-merged, REMOVE the transient build worktree — all
+     TOLERANT (a retry may find them already gone): find its path via \`git -C ${ROOT} worktree list
+     --porcelain\`, \`git -C ${ROOT} worktree remove --force <path> 2>/dev/null || true\`, then
+     \`git -C ${ROOT} branch -D ${branch} 2>/dev/null || true\`, then \`git -C ${ROOT} worktree prune\`.
+Report merged[] = [${branch}] (verbatim) if it merged cleanly OR you resolved+validated it; conflicted[] =
+[${branch}] if you aborted; and validatePassed (the \`${t.validate}\` result if you ran it after resolving, else true).`
 }
 function reviewerBrief(t, plan) {
   return `READ-ONLY review of ${t.id} (${t.title || ''}) as it now stands on ${WORKING_BRANCH} in ${ROOT}.
@@ -457,11 +504,12 @@ criterion it does not actually meet, a bug it introduced, ${t.stackSkill ? `the 
 Honor the locked rules INSOFAR as they apply to ${t.id}'s own changes — a global end-state rule a later
 task satisfies is not this task's blocker: ${HARD_RULES}.
 Do NOT execute build/test/validate commands — you are READ-ONLY and a test runner must create temp dirs,
-which EPERMs in this sandbox; the integrate step ALREADY ran "${t.validate}" in a writable worktree and it
-passed, so review STATICALLY against the diff. A check you cannot run in this sandbox is an OBSERVATION,
-NEVER a BLOCK or CONCERN. Do NOT edit. verdict 'blocked' only if a real IN-SCOPE BLOCK remains, else
-'clean'/'concerns'; classify findings BLOCK/CONCERN/OBSERVATION with file:line (sandbox/environment limits,
-and end-state gaps another task owns = OBSERVATION).`
+which EPERMs in this sandbox. The engineer already ran "${t.validate}" green in its worktree before this
+task integrated, and the workflow runs a FINAL whole-workspace validate after the build — so review
+STATICALLY against the diff. A check you cannot run in this sandbox is an OBSERVATION, NEVER a BLOCK or
+CONCERN. Do NOT edit. verdict 'blocked' only if a real IN-SCOPE BLOCK remains, else 'clean'/'concerns';
+classify findings BLOCK/CONCERN/OBSERVATION with file:line (sandbox/environment limits, and end-state gaps
+another task owns = OBSERVATION).`
 }
 function fixBrief(t, findings, n) {
   return `Fix ${t.id} for these reviewer findings. In THIS isolated worktree, branch off the latest:
@@ -491,13 +539,17 @@ test runner must create temp dirs, which EPERMs in this sandbox; review STATICAL
 run in this sandbox is an OBSERVATION, NEVER a BLOCK or CONCERN. verdict + findings
 BLOCK/CONCERN/OBSERVATION with file:line + evidence (sandbox/environment limits = OBSERVATION).`
 
+// a verdict that asserts the gate did NOT pass — must never read as clean even with empty findings.
+const BLOCKING_VERDICTS = new Set(['blocked', 'revise', 'reject'])
 // run a single read-only review by the chosen executor (who ∈ native|codex|kiro), tagging the source.
 // Returns NULL when the reviewer agent DIED (so the caller can distinguish "did not run" from "ran clean"
-// — a died configured reviewer must never count as a clean gate); otherwise the (possibly empty) findings.
+// — a died configured reviewer must never count as a clean gate); otherwise { findings, verdict }. The
+// VERDICT is surfaced so the caller can catch a blocking verdict paired with empty findings (else such a
+// review would contribute nothing and read as clean).
 async function reviewOnce(who, label, phaseTitle, brief) {
   const r = await routeReview(who, brief, `${label}:${who}`, phaseTitle)
   if (!r || r.gateNotRun) return null   // agent died OR the configured reviewer (e.g. kiro CLI) could not run ⇒ NOT a clean gate
-  return (r.findings || []).map(f => ({ ...f, source: who }))
+  return { findings: (r.findings || []).map(f => ({ ...f, source: who })), verdict: r.verdict }
 }
 
 // adversarial verify (go-live-audit pattern): refute by CODE; BLOCK also refuted by SPEC. Keep a
@@ -574,6 +626,7 @@ async function cleanupWorktrees(when) {
 1. \`git -C ${ROOT} worktree list --porcelain\` — identify worktrees whose path is under \`.claude/worktrees/\` OR whose branch matches \`wf/build/*\` (these are ship-playbook build worktrees, including prior runs' leftovers). Do NOT touch the main working tree (${ROOT}) or any unrelated worktree.
 2. For each: \`git -C ${ROOT} worktree remove --force <path>\`; then if its branch is \`wf/build/*\` and fully merged or stale, \`git -C ${ROOT} branch -D <branch>\`.
 3. \`git -C ${ROOT} worktree prune\` to clear stale admin entries.
+4. Clear any LEFTOVER in-progress merge on the main checkout (a build/merge agent may have died mid-merge, leaving MERGE_HEAD that would break the next merge / the final-validate checkout): \`git -C ${ROOT} merge --abort 2>/dev/null || true\`. Do NOT discard committed work — this only aborts an UNcommitted in-progress merge.
 Never delete non-worktree files and never remove the main checkout. Report removed (count), remaining (worktrees still present), and a short detail.`, { label: `cleanup-worktrees:${when}`, phase: 'Plan', schema: CLEANUP_SCHEMA })
 }
 
@@ -631,110 +684,115 @@ async function buildPlan(plan, prior) {
   const missingDeps = (t) => (t.dependsOn || []).filter(d => !integrated.has(d))
   let nDone = 0, nReReview = 0, nDepBlocked = 0
 
-  for (let li = 0; li < N; li++) {
-    const layer = layers[li].map(id => byId.get(id)).filter(Boolean)
-    const layerPatch = {}
-    // CHECKPOINT partition (status file is the source of truth for "already done")
-    const doneSkip = layer.filter(t => priorOf(t.id) === 'passed')                         // skip entirely
-    const onBranch = layer.filter(t => ON_BRANCH.has(priorOf(t.id)))                        // skip engineer, re-review
-    const fresh = layer.filter(t => priorOf(t.id) !== 'passed' && !ON_BRANCH.has(priorOf(t.id)))
-    // DAG GATE: a fresh task may build ONLY if every dependency is already integrated on WORKING_BRANCH.
-    // A task with an un-integrated dep is recorded 'dep_blocked' (pointing at the ROOT) and NOT built; its
-    // dependents cascade-block. 'dep_blocked' is not on-branch, so on resume it re-evaluates (rebuilds
-    // once the dep lands) — and is NEVER seeded into the dependency gate.
-    const depBlocked = fresh.filter(t => missingDeps(t).length > 0)
-    const toBuild = fresh.filter(t => missingDeps(t).length === 0)
-    for (const t of doneSkip) { out.push({ task: t.id, status: 'passed', fixes: 0, findings: [], resumed: true }); layerPatch[t.id] = { status: 'passed' }; nDone++ }
-    for (const t of depBlocked) {
-      const miss = missingDeps(t)
-      out.push({ task: t.id, status: 'blocked', reason: `dependency not integrated: ${miss.join(', ')} — its code is not on ${WORKING_BRANCH}, so ${t.id} cannot be built on it; fix the upstream task first`, fixes: 0, findings: [], blockedOn: miss })
-      layerPatch[t.id] = { status: 'dep_blocked', blockedOn: miss }   // distinct from review-'blocked'; NOT on-branch
-      nDepBlocked++
-    }
-    nReReview += onBranch.length
+  // match a task's branch against an integrate agent's reported merged[] — id-agnostic, formatting-tolerant.
+  const mergedHas = (integ, t) => ((integ && integ.merged) || []).map(s => String(s).trim()).some(m => m === branchFor(t) || m === t.id || m.endsWith('/' + t.id))
+  // one scoped review of a task → normalized {verdict, findings, _errored?}. NULL (agent died) and
+  // gateNotRun (kiro/codex CLI absent) and THROW all map to a blocked _errored verdict — never a silent pass.
+  const reviewTask = (t, n) => taskReviewSpawn(t, reviewerBrief(t, plan), n ? `review:${t.id}#${n}` : `review:${t.id}`)
+    .then(r => (r && !r.gateNotRun) ? r : { verdict: 'blocked', findings: [], _errored: true },
+          () => ({ verdict: 'blocked', findings: [], _errored: true }))
 
-    // mark ONLY the tasks we'll actually build as in_progress (never reset a skipped/dep-blocked task)
-    await statusStep({ status: 'building', phases: { build: { status: 'in_progress', layer: `${li + 1}/${N}` } },
-      tasks: Object.fromEntries(toBuild.map(t => [t.id, { status: 'in_progress' }])) }, `L${li}-start`)
-
-    // engineers build ONLY the not-yet-done, dependency-satisfied tasks (parallel, isolated worktrees).
-    // onRejected → {t, r:null} so a THROWN engineer is recorded dev_failed (not dependent on parallel()'s null-substitution).
-    const built = await parallel(toBuild.map(t => () =>
-      buildSpawn(t, engineerBrief(t), `build:${t.id}`).then(r => ({ t, r }), () => ({ t, r: null }))))
-    const passedBranches = built.filter(b => b && b.r && b.r.status === 'passed').map(b => branchFor(b.t))
-    let integ = null
-    if (passedBranches.length) integ = await rAgent(integrateBrief(passedBranches), { label: `integrate:L${li}`, phase: 'Build', schema: INTEGRATE_RESULT })
-    // match a task's branch against the integrate agent's reported merged[] by the branch we CREATED
-    // (branchFor(t)) or the bare id — id-agnostic (works for any id format) and tolerant of formatting.
-    const mergedRaw = ((integ && integ.merged) || []).map(s => String(s).trim())
-    const isMerged = (t) => mergedRaw.some(m => m === branchFor(t) || m === t.id || m.endsWith('/' + t.id))
-    for (const b of built.filter(b => b && (!b.r || b.r.status !== 'passed'))) {
-      out.push({ task: b.t.id, status: 'blocked', reason: 'engineer validate failed', fixes: 0, findings: [] })
-      layerPatch[b.t.id] = { status: 'dev_failed' }
-    }
-    // any toBuild task whose engineer agent errored outright (no result object) — record it, don't lose it
-    const seen = new Set(built.filter(Boolean).map(b => b.t.id))
-    for (const t of toBuild) if (!seen.has(t.id)) { out.push({ task: t.id, status: 'blocked', reason: 'engineer agent errored (no result)', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'dev_failed' } }
-    // a builtPassed task counts as on-branch ONLY if its branch actually merged; an unmerged one (conflict
-    // / null integrate) is recorded 'dev_done' (rebuilds on resume) and is NOT reviewed or seeded as a dep.
-    const onBranchNow = []
-    for (const b of built.filter(b => b && b.r && b.r.status === 'passed')) {
-      if (isMerged(b.t)) { integrated.add(b.t.id); onBranchNow.push(b.t); layerPatch[b.t.id] = { status: 'integrated' } }
-      else { out.push({ task: b.t.id, status: 'blocked', reason: `engineer passed but the merge did not land (conflict / integrate failure) — ${b.t.id}'s code is on its task branch only, not on ${WORKING_BRANCH}`, fixes: 0, findings: [] }); layerPatch[b.t.id] = { status: 'dev_done' } }
-    }
-    // (the integrate agent runs VALIDATE_ALL per layer for early signal, but the AUTHORITATIVE,
-    // resume-safe workspace check is the FINAL validate gate after the build — see below. A per-layer
-    // synthetic blocker here would not survive a checkpoint resume, so convergence does not rest on it.)
-
-    // review set = THIS layer's freshly-integrated tasks + the on-branch tasks we skipped rebuilding — all
-    // have code on WORKING_BRANCH. Unmerged 'dev_done' tasks are excluded (nothing on the branch to review).
-    const reviewSet = [...onBranchNow, ...onBranch]
-    // TASK_REVIEW === 'skip': no per-task reviewer — a task passes on its engineer validate + a real merge.
-    if (TASK_REVIEW === 'skip') {
-      for (const t of reviewSet) { out.push({ task: t.id, status: 'passed', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'passed' } }
-      await statusStep({ tasks: layerPatch }, `L${li}-done`)
-      continue
-    }
-    await statusStep({ tasks: layerPatch }, `L${li}-built`)
-    // initial per-task reviews are READ-ONLY → run them in PARALLEL across the layer (slice-scoped). A
-    // reviewer REJECTION (not just null) is caught here → recorded, never silently dropped.
-    const reviewed = await parallel(reviewSet.map(t => () =>
-      taskReviewSpawn(t, reviewerBrief(t, plan), `review:${t.id}`).then(
-        r => ({ t, review: (r && !r.gateNotRun) ? r : { verdict: 'blocked', findings: [], _errored: true } }),   // NULL/died OR gateNotRun (kiro CLI absent) → blocked, never a silent pass
-        () => ({ t, review: { verdict: 'blocked', findings: [], _errored: true } }))))     // THROW → blocked
-    // fix→re-integrate MUST stay SERIAL: each git-merges the shared working branch, so concurrent fix
-    // loops would race/conflict on it. The re-review after each integrate sees the updated branch.
-    for (const item of reviewed.filter(Boolean)) {
-      const t = item.t
-      let review = item.review
+  // PER-TASK PIPELINE UNIT — build → integrate (under mergeLock) → review → bounded fix-loop. Reviews fire
+  // the moment THIS task integrates (not batched per layer). alreadyOnBranch tasks (checkpoint re-review)
+  // skip build+integrate and go straight to re-review. Records EXACTLY ONE terminal entry in out/layerPatch.
+  async function runTask(t, alreadyOnBranch, layerPatch) {
+    try {
+      if (!alreadyOnBranch) {
+        const r = await buildSpawn(t, engineerBrief(t), `build:${t.id}`).catch(() => null)   // throw/null → dev_failed
+        if (!r || r.status !== 'passed') {
+          out.push({ task: t.id, status: 'blocked', reason: r ? 'engineer validate failed' : 'engineer agent errored (no result)', fixes: 0, findings: [] })
+          layerPatch[t.id] = { status: 'dev_failed' }; return
+        }
+        // integrate JUST this task's branch — serialized by the merge lock (concurrent merges would race);
+        // the merge agent RESOLVES conflicts (combining both sides), not bails — see mergeBrief.
+        // .catch→null so a THROWN integrate (e.g. schema-validation failure) collapses to the SAME
+        // not-on-branch path as a null/conflict (→ dev_done, rebuilds on resume) — never the outer catch's
+        // 'blocked', which is an ON_BRANCH status and would wrongly seed the dependency gate on resume.
+        const integ = await mergeLock(() => rAgent(mergeBrief(t, branchFor(t)), { label: `integrate:${t.id}`, phase: 'Build', schema: INTEGRATE_RESULT })).catch(() => null)
+        if (!mergedHas(integ, t)) {   // conflict / null integrate → code on the task branch only, NOT on WORKING_BRANCH
+          out.push({ task: t.id, status: 'blocked', reason: `engineer passed but the merge did not land (conflict / integrate failure) — ${t.id}'s code is on its task branch only, not on ${WORKING_BRANCH}`, fixes: 0, findings: [] })
+          layerPatch[t.id] = { status: 'dev_done' }; return
+        }
+        integrated.add(t.id)                 // code is now on the working branch → unblocks dependents (next layer)
+        layerPatch[t.id] = { status: 'integrated' }
+      }
+      // on the branch now → review THIS task (skip if no per-task reviewer)
+      if (TASK_REVIEW === 'skip') { out.push({ task: t.id, status: 'passed', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'passed' }; return }
+      let review = await reviewTask(t)
       let fixes = 0
       let blockers = inScopeBlockers(review, t)           // ONLY findings this task can act on
       let deferred = crossTaskCount(review, t)
       try {
         while (blockers.length && fixes < MAX_FIX) {
           fixes++
-          await buildSpawn(t, fixBrief(t, blockers, fixes), `fix:${t.id}#${fixes}`)
-          const reInt = await rAgent(integrateBrief([fixBranchFor(t, fixes)]), { label: `reintegrate:${t.id}#${fixes}`, phase: 'Build', schema: INTEGRATE_RESULT })
-          const rr = await taskReviewSpawn(t, reviewerBrief(t, plan), `review:${t.id}#${fixes}`)
-          review = (rr && !rr.gateNotRun) ? rr : { verdict: 'blocked', findings: [], _errored: true }
+          await buildSpawn(t, fixBrief(t, blockers, fixes), `fix:${t.id}#${fixes}`).catch(() => null)
+          await mergeLock(() => rAgent(mergeBrief(t, fixBranchFor(t, fixes)), { label: `reintegrate:${t.id}#${fixes}`, phase: 'Build', schema: INTEGRATE_RESULT }))
+          review = await reviewTask(t, fixes)
           blockers = inScopeBlockers(review, t)
           deferred = crossTaskCount(review, t)
-          // the reviewer is told the workspace validate already passed — so if the re-integrate's validate
-          // FAILED, that's a real in-scope blocker the static review won't see; keep the task blocked.
-          if (reInt && reInt.validatePassed === false && !blockers.length) blockers = [{ severity: 'BLOCK', file: t.id, issue: `workspace validate (${VALIDATE_ALL}) failed after re-integrating ${t.id} fix${fixes}` }]
         }
       } catch (e) {
-        // a genuine throw in the serial fix loop must NOT crash the whole build — record the task blocked and move on
         log(`fix loop for ${t.id} errored (non-fatal): ${String((e && e.message) || e)}`)
         if (!blockers.length) blockers = [{ severity: 'BLOCK', file: t.id, issue: `fix/re-integrate agent errored: ${String((e && e.message) || e)}` }]
       }
-      const status = (blockers.length || review._errored) ? 'blocked' : 'passed'
-      out.push({ task: t.id, status, fixes, findings: (review.findings || []).filter(f => fileInScope(f.file, t.writeScope)), crossTaskDeferred: deferred })
+      // a reviewer that returned a BLOCKING verdict but NO in-scope finding and NO deferred cross-task gap
+      // is ambiguous — block (don't silently pass). Guarded by !deferred so a verdict driven by correctly-
+      // deferred end-state gaps does NOT over-block the slice.
+      const verdictBlocks = BLOCKING_VERDICTS.has(review.verdict) && !blockers.length && !deferred
+      const status = (blockers.length || review._errored || verdictBlocks) ? 'blocked' : 'passed'
+      out.push({ task: t.id, status, fixes, findings: (review.findings || []).filter(f => fileInScope(f.file, t.writeScope)), crossTaskDeferred: deferred, ...(verdictBlocks ? { reason: `reviewer returned a blocking verdict (${review.verdict}) with no itemized in-scope finding` } : {}) })
       layerPatch[t.id] = { status, fixes, ...(deferred ? { crossTaskDeferred: deferred } : {}) }
+    } catch (e) {
+      // any uncaught throw in the unit → record blocked, never lose the task or crash the build. Use the
+      // GROUND TRUTH (integrated.has) for the persisted status: an on-branch task → 'blocked' (re-review on
+      // resume); a task whose code never landed → 'dev_failed' (rebuild on resume). Never mislabel a
+      // not-on-branch task as the ON_BRANCH 'blocked'.
+      log(`task ${t.id} pipeline errored (non-fatal): ${String((e && e.message) || e)}`)
+      out.push({ task: t.id, status: 'blocked', reason: `task pipeline errored: ${String((e && e.message) || e)}`, fixes: 0, findings: [] })
+      layerPatch[t.id] = { status: integrated.has(t.id) ? 'blocked' : 'dev_failed' }
     }
-    // safety net: no integrated task may vanish — any reviewSet task with no `out` entry is recorded blocked
-    const reviewedIds = new Set(out.map(o => o.task))
-    for (const t of reviewSet) if (!reviewedIds.has(t.id)) { out.push({ task: t.id, status: 'blocked', reason: 'reviewer slot lost (no result)', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'blocked' } }
+  }
+
+  for (let li = 0; li < N; li++) {
+    const layer = layers[li].map(id => byId.get(id)).filter(Boolean)
+    const layerPatch = {}   // mutated by concurrent runTask closures — safe (JS single-threaded; each record is synchronous)
+    // CHECKPOINT partition (status file is the source of truth for "already done")
+    const doneSkip = layer.filter(t => priorOf(t.id) === 'passed')                         // skip entirely
+    const onBranch = layer.filter(t => ON_BRANCH.has(priorOf(t.id)))                        // skip engineer, re-review
+    const fresh = layer.filter(t => priorOf(t.id) !== 'passed' && !ON_BRANCH.has(priorOf(t.id)))
+    // DAG GATE: a fresh task may build ONLY if every dependency is already integrated on WORKING_BRANCH.
+    // A task with an un-integrated dep is recorded 'dep_blocked' (pointing at the ROOT) and NOT built; its
+    // dependents cascade-block. 'dep_blocked' is not on-branch, so on resume it re-evaluates and is NEVER
+    // seeded into the dependency gate. (Intra-layer tasks are independent — all deps live in EARLIER layers,
+    // already integrated before this layer starts — so the gate is decided once here, before the pipeline.)
+    const depBlocked = fresh.filter(t => missingDeps(t).length > 0)
+    const toBuild = fresh.filter(t => missingDeps(t).length === 0)
+    for (const t of doneSkip) { out.push({ task: t.id, status: 'passed', fixes: 0, findings: [], resumed: true }); layerPatch[t.id] = { status: 'passed' }; nDone++ }
+    for (const t of depBlocked) {
+      const miss = missingDeps(t)
+      out.push({ task: t.id, status: 'blocked', reason: `dependency not integrated: ${miss.join(', ')} — its code is not on ${WORKING_BRANCH}, so ${t.id} cannot be built on it; fix the upstream task first`, fixes: 0, findings: [], blockedOn: miss })
+      layerPatch[t.id] = { status: 'dep_blocked', blockedOn: miss }
+      nDepBlocked++
+    }
+    nReReview += onBranch.length
+
+    // persist doneSkip/depBlocked + mark the tasks we'll work on as in_progress (ONE sequential write,
+    // BEFORE the parallel pipeline — never write the status file from inside the concurrent pipeline).
+    await statusStep({ status: 'building', phases: { build: { status: 'in_progress', layer: `${li + 1}/${N}` } },
+      tasks: { ...Object.fromEntries([...toBuild, ...onBranch].map(t => [t.id, { status: 'in_progress' }])), ...layerPatch } }, `L${li}-start`)
+
+    // PER-TASK PIPELINE: each task flows build→integrate→review→fix as its own unit, concurrently within the
+    // layer (merges serialized by mergeLock; builds/reviews parallel under their gates). The `await` is the
+    // LAYER BARRIER — layer N+1 starts only once every task here is integrated (the DAG gate depends on it).
+    await parallel([
+      ...toBuild.map(t => () => runTask(t, false, layerPatch)),
+      ...onBranch.map(t => () => runTask(t, true, layerPatch)),
+    ])
+
+    // defensive: every worked task must have recorded an outcome (runTask always does; this catches a bug)
+    const recorded = new Set(out.map(o => o.task))
+    for (const t of [...toBuild, ...onBranch]) if (!recorded.has(t.id)) { out.push({ task: t.id, status: 'blocked', reason: 'task unit produced no result', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'blocked' } }
+    // ONE sequential write of the whole layer's outcomes — race-free (after the barrier)
     await statusStep({ tasks: layerPatch }, `L${li}-done`)
   }
   if (nDone || nReReview || nDepBlocked) log(`build: ${nDone} already-passed skipped, ${nReReview} on-branch re-reviewed (no rebuild), ${nDepBlocked} blocked on un-integrated dependencies`)
@@ -920,12 +978,14 @@ await statusStep({ phases: { build: { status: 'done', workspaceValidate: workspa
 // plan-vs-implementation gate — and now the EXPLICIT end-state gate (see implBrief).
 let implFindings = []
 let implRan = true   // a configured impl reviewer that DIES is not a clean gate
+let implBlockingVerdict = false   // ran, returned a blocking verdict, but no itemized BLOCK/CONCERN
 if (IMPL_REVIEW !== 'skip') {
   phase('Impl review')
   await statusStep({ status: 'impl_review', phases: { impl_review: { status: 'in_progress' } } }, 'impl-start')
   const r = await reviewOnce(IMPL_REVIEW, 'impl', 'Impl review', implBrief(plan))   // null = agent died
   implRan = r !== null
-  implFindings = r || []
+  implFindings = r ? r.findings : []
+  implBlockingVerdict = implRan && BLOCKING_VERDICTS.has(r.verdict) && !implFindings.some(isBlocking)
   await statusStep({ phases: { impl_review: { status: implRan ? 'done' : 'errored', findings: implFindings.length } } }, 'impl-done')
 } else {
   await statusStep({ phases: { impl_review: { status: 'skipped' } } }, 'impl-skip')
@@ -948,6 +1008,7 @@ let openRegister = await dedupVerify(realFindings, 'Verify')
 // a non-green final workspace validate. These are FACTS — a code/spec refuter cannot argue them away.
 const markers = blockedTasks.map(b => ({ severity: 'BLOCK', file: b.task, issue: b.reason || `task ${b.task} did not pass after ${b.fixes || 0} fixes`, source: 'native', phase: 'build', blockedTask: true }))
 if (!implRan) markers.push({ severity: 'BLOCK', file: 'impl-review', issue: `impl review (${IMPL_REVIEW}) did not produce a verdict — its agent died; the plan-vs-implementation gate was NOT run`, source: 'native', phase: 'impl', blockedTask: true })
+else if (implBlockingVerdict) markers.push({ severity: 'BLOCK', file: 'impl-review', issue: `impl review (${IMPL_REVIEW}) returned a BLOCKING verdict but no itemized finding — the end-state gate did not pass; treat as not-clean and inspect the impl review`, source: 'native', phase: 'impl', blockedTask: true })
 if (!workspaceValidatePassed) markers.push({ severity: 'BLOCK', file: 'workspace-validate', issue: `workspace validate (${VALIDATE_ALL}) did not pass green on ${WORKING_BRANCH}${fv && fv.detail ? ': ' + fv.detail : ' (gate agent died — not confirmed)'} — the integrated tree is not green`, source: 'native', phase: 'build', blockedTask: true })
 openRegister = [...openRegister, ...markers]   // blocked tasks / a dead gate / a non-green tree ALWAYS keep the register non-empty → never a false converged
 // Whole-codebase SEMANTIC end-state (legacy paths removed, routes wired) is gated ONLY by impl review;
@@ -977,7 +1038,10 @@ if (openRegister.length === 0 && GO_LIVE) {                // step 13 — only w
   } else {
     const r = await reviewOnce('native', 'audit', 'Audit', auditBrief)   // null = agent died
     auditRan = r !== null
-    auditFindings = r || []
+    auditFindings = r ? r.findings : []
+    // ran with a blocking verdict but no itemized finding → a launch-readiness FACT, not clean
+    if (auditRan && BLOCKING_VERDICTS.has(r.verdict) && !auditFindings.some(isBlocking))
+      auditGateMarkers = [{ severity: 'BLOCK', file: 'go-live-audit', issue: 'go-live audit returned a BLOCKING verdict but no itemized finding — launch readiness NOT confirmed', source: 'native', phase: 'audit', blockedTask: true }]
   }
   openRegister = await dedupVerify(auditFindings.map(f => ({ ...f, phase: 'audit' })), 'Verify')
   openRegister = [...openRegister, ...auditGateMarkers]   // a failed launch gate can never be refuted into clean
@@ -991,10 +1055,11 @@ if (openRegister.length === 0 && GO_LIVE) {                // step 13 — only w
 await cleanupWorktrees('final')
 
 // Final overall state in the live status file (done = clean; needs_fix = openRegister non-empty).
+const converged = openRegister.length === 0
 await statusStep({
-  status: openRegister.length === 0 ? 'done' : 'needs_fix',
+  status: converged ? 'done' : 'needs_fix',
   result: {
-    converged: openRegister.length === 0,
+    converged,
     openRegisterCount: openRegister.length,
     workspaceValidatePassed, endStateUngated,
     build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes, ...(b.crossTaskDeferred ? { crossTaskDeferred: b.crossTaskDeferred } : {}) })),
@@ -1003,12 +1068,30 @@ await statusStep({
   },
 }, 'final')
 
+// LAST STEP: on a CONVERGED (fully clean) run, archive the delivered plan to .ulpi/plans/done/ so the
+// active plans dir holds only in-flight work. SKIPPED when needs_fix (a fix round may reuse the plan) and
+// when resuming from a supplied external plan that lives outside .ulpi/plans. Non-fatal — a failed archive
+// never affects the return.
+let planArchived = false
+if (converged && plan && plan.planPath) {
+  try {
+    const ARCHIVE_SCHEMA = { type: 'object', additionalProperties: false, required: ['moved'], properties: { moved: { type: 'array', items: { type: 'string' } }, detail: { type: 'string' } } }
+    const a = await rAgent(`Archive the COMPLETED plan in ${ROOT} (it converged clean — fully delivered). The plan path is "${plan.planPath}" (resolve relative to ${ROOT} if not absolute); its markdown sibling is the same path with a .md extension (and the .json is the .json extension). Move BOTH the .json and the .md into ${ROOT}/.ulpi/plans/done/:
+1. \`mkdir -p ${ROOT}/.ulpi/plans/done\`
+2. For each of the plan's .json and .md files that EXISTS and currently lives under ${ROOT}/.ulpi/plans/ (NOT already in done/, and NOT outside .ulpi/plans — do not move an external/supplied plan): \`git -C ${ROOT} mv <file> .ulpi/plans/done/\` if it's git-tracked, else \`mv <file> ${ROOT}/.ulpi/plans/done/\`. Overwrite if a same-named file is already in done/.
+Do NOT touch any other plan or file. Report moved[] (the files you moved) and a short detail.`, { label: 'archive-plan', phase: 'Verify', schema: ARCHIVE_SCHEMA, model: 'haiku', effort: 'low', agentType: 'general-purpose' })
+    planArchived = !!(a && Array.isArray(a.moved) && a.moved.length)
+    if (planArchived) await statusStep({ plan: { archivedTo: `.ulpi/plans/done/` } }, 'plan-archived')
+  } catch (e) { log(`plan archive failed (non-fatal): ${String((e && e.message) || e)}`) }
+}
+
 return {
   // converged = real work ran AND no verified findings survived. Otherwise openRegister IS the feedback
   // for the user — they decide whether to run a fix round (this workflow does not loop on its own).
-  converged: openRegister.length === 0,
+  converged,
   ranReal: true,
   plan: plan.planName,
+  planArchived,   // TRUE when a converged run moved the plan to .ulpi/plans/done/
   planSupplied: RESUME_PLAN,    // TRUE when this run RESUMED from a pre-built/pre-reviewed plan (plan + plan-review skipped)
   build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes, ...(b.crossTaskDeferred ? { crossTaskDeferred: b.crossTaskDeferred } : {}) })),
   openRegister,                 // verified findings = the feedback to show the user

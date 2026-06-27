@@ -65,21 +65,40 @@ break the merged tree, and the static reviewers can't catch a cross-file failure
 closed**: a died/absent/empty reviewer, a died go-live audit, or a RED final validate is never counted
 clean (`openRegister` stays non-empty), and the run reports which gate did/did not run.
 
-## Layer-by-layer execution
+## Per-task pipeline within a layer (NOT a per-layer batch)
 
-Process `parallelLayers` in order. A layer's tasks may run concurrently ONLY when their `writeScope`
-sets are disjoint; if two tasks in the same layer touch the same file, serialize them. Between
-layers there is a BARRIER: every task in layer N must pass and be merged before layer N+1 starts,
-because later tasks build on earlier code.
+Each task is its own **unit**: `build → integrate → review → fix-loop`. A layer's tasks run that unit
+**concurrently** (pipelined), so a task's review fires the moment THAT task integrates — not batched after
+the whole layer builds. Between layers there is a BARRIER (the `await` over the layer's units): every task
+in layer N must integrate before layer N+1 starts, because later layers depend on earlier code (the DAG).
 
 ```
 for layer in parallelLayers:
-    disjoint = tasks whose writeScope does not overlap any other in-flight task
-    run those engineer↔reviewer cycles in parallel (isolated worktrees)
-    serialize the rest
-    when all pass: merge each worktree back onto the working branch
-    only then proceed to the next layer
+    run, concurrently, one unit per task:
+        runTask(t) = build(t, isolated worktree)
+                   → integrate(t)   # git-merge t's branch onto the working branch, under the MERGE LOCK
+                   → review(t)      # slice-scoped, read-only
+                   → fix-loop(t)    # only on IN-SCOPE blockers, bounded by MAX_FIX
+    await all units   ← LAYER BARRIER (every task integrated before the next layer)
 ```
+
+Concurrency: builds and reviews run in parallel (gated by `MAX_BUILD_PARALLEL` / `MAX_PARALLEL`); only the
+git **merge** step serializes, via a single-slot **merge lock** (`mergeLock`) — two `git merge`s onto the
+shared working branch would race. The merge is seconds; the expensive build/review work stays parallel.
+
+**Integrate is merge-only.** A per-task integrate just merges + removes the worktree — it does NOT re-run
+the whole-workspace `VALIDATE_ALL` (that would mean a full typecheck/lint/test *per task*, and in a
+half-migrated tree the whole suite fails on other tasks' unfinished code → every task falsely blocked).
+The engineer validated its own slice in its worktree; the **whole tree is validated ONCE at the final
+validate gate** after the build (see below). On a merge **conflict**, the merge agent RESOLVES it
+(combining both sides, never dropping either's contribution), validates the resolution BEFORE committing,
+and aborts only if it truly can't combine — it never bails blindly. The merge is **idempotent under retry**
+(clears a leftover `MERGE_HEAD`; short-circuits if the task is already merged).
+
+A task's status from its unit: `integrated` (merged) · `dev_done` (engineer passed but merge didn't land —
+rebuilds on resume) · `dev_failed` (engineer validate failed) · `dep_blocked` (a dependency isn't
+integrated) · `passed`/`blocked` (after review + fix loop). Only on-branch statuses seed the dependency
+gate.
 
 ## The engineer ↔ reviewer pairing
 
@@ -163,32 +182,35 @@ had no scope to remove.) So:
 ### 3. Fix loop — IN-SCOPE blockers only
 
 Filter the reviewer's findings through the task's `writeScope`. Loop **only on BLOCK/CONCERN whose `file`
-the task can actually touch** — handing those back to the SAME engineer (respawn with the findings, or
-SendMessage to keep context); it fixes, re-runs `validateCommand`, re-integrates, re-reviews. Findings
-OUTSIDE `writeScope` are end-state gaps another task owns: count them (`crossTaskDeferred`), surface them
-to impl review, but NEVER feed them to this engineer (it can't edit them) and NEVER let them block the
-slice. Repeat until:
+the task can actually touch** — hand those back to the engineer; it fixes, re-merges (merge-only, under the
+lock), re-reviews. The loop condition is **purely the in-scope review findings** — a CLEAN review (no
+in-scope BLOCK/CONCERN) ends the loop immediately. Findings OUTSIDE `writeScope` are end-state gaps another
+task owns: count them (`crossTaskDeferred`), defer to impl review, but NEVER feed them to this engineer and
+NEVER let them block the slice. Repeat until no in-scope BLOCK/CONCERN remains, bounded by `MAX_FIX`.
 
-- no in-scope BLOCK/CONCERN remains, AND
-- `validateCommand` passes green, AND
-- the task-exit gate (below) is satisfied.
+> **Do NOT inject a whole-workspace validate failure as a per-task blocker.** Earlier the re-integrate ran
+> the whole-suite `VALIDATE_ALL` and a failure (caused by *other* tasks' unfinished code in the
+> half-migrated tree) was fabricated into a BLOCK against the current task — so a task with a CLEAN review
+> looped pointlessly until `MAX_FIX`, then was falsely blocked. The fix loop must depend ONLY on the slice
+> review. Whole-tree validation belongs to the single **final validate gate**, not the per-task loop.
 
-Cap the per-task fix loop (e.g. 3 iterations); if an in-scope blocker still remains, stop and surface the
-task as blocked rather than merging broken work. The whole-codebase end-state is enforced LATER — by impl
-review (step 12) over the fully-integrated tree, plus the integrate-step workspace `validate`. That, not
-the per-task blocked count, is the "is it real working software" signal.
+If an in-scope blocker still remains after `MAX_FIX`, surface the task as blocked rather than merging broken
+work. The whole-codebase end-state is enforced LATER — by impl review (step 12) over the fully-integrated
+tree, plus the **final `VALIDATE_ALL` gate** (once, on the complete tree, when the suite can actually pass).
+That, not the per-task blocked count, is the "is it real working software" signal.
 
-### 4. Merge the layer
+### 4. Integrate the task (per-task, merge-only, under the lock)
 
-Once every task in the layer passes, fold each worktree back onto the working branch. **Then remove the
-merged build worktrees and `git worktree prune` BEFORE re-running the validate** — build agents run with
-`isolation: 'worktree'`, which leaves full repo checkouts under `.claude/worktrees/`; because `tsc` and
-`eslint .` don't respect `.gitignore`, a leftover worktree gets walked by the validate and fails the
-gate on pollution no matter what the task code does. Re-run the affected `validateCommand`(s) on the
-cleaned tree, scoped so it never scans `.claude/worktrees/**` (or sibling agent dirs `.factory`,
-`.gemini`, `.opencode`, `.trae`, `.vibe`). If a merge conflicts (two tasks touched the same surface
-despite the disjoint check), resolve intentionally or escalate — never auto-squash over a conflict.
-(The workflow also prunes dangling worktrees at preflight and at the end of the run.)
+Each task integrates **on its own** the moment its engineer passes — NOT batched at end-of-layer. Under
+the `mergeLock` (so merges never race), the merge agent: git-merges the task's branch onto the working
+branch, removes that task's transient worktree (tolerant `|| true` so a retry can't fail on an
+already-removed one), and reports `merged[]`/`conflicted[]`. It does **not** run the whole-workspace
+validate here (that's the single final gate). On a conflict it **resolves intentionally** — reads both
+sides, combines them so neither's contribution is dropped, validates the resolution BEFORE committing, and
+aborts only if it genuinely can't combine. The merge is **idempotent under retry** (clears a leftover
+`MERGE_HEAD`; short-circuits if the task is already merged / its branch is gone). Build worktrees are also
+pruned at preflight, before the final validate, and at end-of-run, so `tsc`/`eslint .` never walk a stale
+`.claude/worktrees/` checkout and false-fail the gate.
 
 ## Task-exit gate
 

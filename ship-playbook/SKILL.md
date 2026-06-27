@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.7.0
+version: 1.8.0
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -93,8 +93,11 @@ This skill drives a long-running, multi-agent delivery Workflow. Non-negotiable 
    LATER task removes, a route/link a later task adds, an export a later task consumes) to the OWNING
    task as an OBSERVATION, NOT a BLOCK against the current slice. The fix loop only acts on findings
    INSIDE the task's writeScope (the engineer can't fix what it can't touch). The whole-codebase
-   end-state is the IMPL-REVIEW gate (step 12) + the integrate-step workspace validate — that is the
-   real "is it working software" signal, not the per-task blocked count.
+   end-state is the IMPL-REVIEW gate (step 12) + the FINAL `validate` gate on the integrated tree (run
+   ONCE after the build, when the whole suite can pass) — that is the real "is it working software"
+   signal, not the per-task blocked count. Per-task integrate is MERGE-ONLY: it does NOT run the
+   whole-workspace validate (a whole-suite failure in a half-migrated tree must never become a per-task
+   blocker — that loops a clean slice to death).
 10. Each run gets a LIVE status file at `<root>/.ulpi/workflows/<workflow-id>.json` — the SKILL creates
     it before launch (this sandboxed Workflow has no FS access), the Workflow updates it at every phase
     + DAG layer via cheap status-writer agents, and the skill reads it back in Phase 3. Status tracking
@@ -141,6 +144,24 @@ plan-vs-implementation) · step 14 → Verify (dedup + adversarial verify → fe
 kiro); there is no automatic recursion — the workflow returns its findings and stops.
 
 ## Phase 1 — Intake
+
+### Step 0 — Decide the MODE: new run vs resume (do this FIRST)
+
+The skill runs in one of two modes — detect which before anything else:
+
+- **NEW RUN** (default — the user gives a feature prompt). Run the full intake below (dependency check +
+  gate questions + scope grounding), create a FRESH status file, and launch with full `args`.
+- **RESUME a previous run** (the user says "resume", "continue the build", gives a `wf_…` runId, or points
+  at an existing `.ulpi/workflows/<id>.json`). Do NOT re-run intake and do NOT overwrite the status file.
+  Instead, from the repo root run **`node <skill-dir>/helpers/wf-status.mjs --resume [<runId>]`** — it reads
+  the run's status file and prints the exact `Workflow({ scriptPath, args })` to relaunch, already carrying
+  `planPath` (skip re-planning), `checkpointResume:true` (skip tasks already done), and the same
+  `statusFile`. Launch that verbatim. The durable checkpoint makes resume session-independent (no
+  `resumeFromRunId`); the build rebuilds only what's left. (If `--resume` warns that `launchArgs` is
+  missing — a pre-v1.7.0 run — supply the missing `validate`/`hardRules`; run `--write` first if there's no
+  status file yet.) Then skip to Phase 3 reporting when it returns.
+
+The rest of Phase 1 is the NEW-RUN path.
 
 ### Step 1 — Dependency check & setup (do this FIRST)
 
@@ -343,15 +364,21 @@ Workflow({ scriptPath: ".../references/workflow-template.js",
                                                               // force a full rebuild (default true: skip done tasks)
 ```
 
-**After launch, stamp the run id.** The Workflow tool returns a `runId` (`wf_…`) immediately (it runs in
-the background). Write `runId` and the exact `resume` command into the status file via Bash+jq, e.g.
-`jq '. + {runId:"<runId>", resume:"Workflow({scriptPath, resumeFromRunId:\"<runId>\", args:{…}})", status:"running"}'`
-— this makes the file a self-describing resume pointer that survives across sessions. (`wf-status.mjs`
-matches a run to this file by `runId`.)
+**After launch, stamp the run id AND the full launch args.** The Workflow tool returns a `runId` (`wf_…`)
+immediately (it runs in the background). Write `runId`, `status:"running"`, and — critically — the COMPLETE
+`launchArgs` (the exact `args` object you just passed: prompt, root, workingBranch, validate, hardRules,
+all harnesses, goLive, …) into the status file via Bash+jq:
+`jq --argjson la '<the args object>' '. + {runId:"<runId>", status:"running", launchArgs:$la}'`
+This makes the status file a **self-describing, deterministic resume source** — `wf-status.mjs --resume`
+reads `launchArgs` back verbatim so a resume re-fires the identical config (no hand-assembly, no drift).
 
-**Resuming?** Pass `planPath` (or `plan`) instead of relying on `prompt`/`planHarness`/`planReview` —
-those are ignored when a plan is supplied. The Workflow loads the plan, validates it, and starts at build.
-Re-pass the SAME `workflowId`/`statusFile` so the resumed run keeps updating the same status file.
+**Resuming a previous run? Use `wf-status.mjs --resume` — do NOT hand-assemble args.** From the repo root:
+`node <skill-dir>/helpers/wf-status.mjs --resume [<runId>]` reads the run's status file and prints the exact
+`Workflow({ scriptPath, args })` to relaunch — already carrying `planPath` (skip re-planning),
+`checkpointResume:true` (skip tasks already done), and the same `statusFile`. Launch that verbatim. The
+durable status-file checkpoint makes resume **session-independent** — no `resumeFromRunId` needed. (If the
+run predates v1.7.0 / has no `launchArgs`, `--resume` warns and you supply the missing `validate`/`hardRules`;
+`--write [<runId>]` first backfills a status file from the journal.)
 
 `mapRefresh` is deliberately NOT in `args` — it's the only intake answer the Workflow doesn't run.
 The map refresh regenerates `CLAUDE.md` from the FINISHED code, so the skill runs it itself in Phase 3
