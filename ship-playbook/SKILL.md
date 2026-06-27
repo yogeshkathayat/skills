@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.6.3
+version: 1.7.0
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -100,6 +100,19 @@ This skill drives a long-running, multi-agent delivery Workflow. Non-negotiable 
     + DAG layer via cheap status-writer agents, and the skill reads it back in Phase 3. Status tracking
     is OBSERVABILITY and is NON-FATAL: a failed status write is logged and ignored, NEVER blocking the
     build. The file is the at-a-glance "where did we get to / stop / resume / retry" record.
+11. CHECKPOINT RESUME is durable, not cache-based: the build reads the status file and SKIPS every task
+    already marked done, rebuilding only the rest — independent of the runtime's agent cache (which any
+    template edit invalidates). So on resume, REUSE the prior run's status file; do NOT overwrite it with a
+    fresh all-`pending` document (that erases the checkpoint). A task builds only once its `dependsOn` are
+    actually INTEGRATED on the working branch (DAG gate) — a task whose dependency never landed is
+    `dep_blocked` (pointing at the ROOT), never built on a broken base.
+12. GATES FAIL CLOSED — a configured gate that did not actually run is NEVER counted as clean. A died/
+    absent/empty reviewer (native/codex/kiro), a died go-live audit, and a RED final workspace validate each
+    keep `openRegister` non-empty so `converged` is false. The FINAL `validate` on the integrated tree is
+    the load-bearing end-state truth (the "run the full suite on the final branch" gate): slices can each
+    pass alone yet break the merged tree, so a non-green final validate blocks regardless of per-task
+    verdicts. Report `planReviewRan`/`implReviewRan`/`auditRan`/`workspaceValidatePassed`/`endStateUngated`
+    honestly — never present a build with a dead gate or a non-green tree as shippable.
 </EXTREMELY-IMPORTANT>
 
 # Ship Playbook
@@ -296,7 +309,13 @@ capture the `scriptPath` the Workflow tool persists for it; pass that path in as
 **First, create the live status file** (the Workflow sandbox has no filesystem access, so the SKILL must
 create it). Pick a `workflowId` — `ship-<UTC timestamp>-<short-slug-of-the-prompt>` (e.g. via Bash
 `date -u +%Y%m%dT%H%M%SZ`) — set `statusFile = <root>/.ulpi/workflows/<workflowId>.json` (ABSOLUTE), and
-`Write` the initial document so a watcher sees the run the instant it launches:
+`Write` the initial document so a watcher sees the run the instant it launches.
+
+**RESUME — do NOT clobber an existing status file.** The build now does CHECKPOINT RESUME: it reads the
+status file and SKIPS every task already marked done (`passed`/`integrated`/`reviewing`/`fixing`/`blocked`),
+rebuilding only the rest. So when resuming a prior run, REUSE its existing `<root>/.ulpi/workflows/<id>.json`
+(pass that same `workflowId`/`statusFile`) — do NOT overwrite it with a fresh all-`pending` document, or the
+checkpoint is lost and everything rebuilds. Only `Write` the initial document for a brand-NEW run.
 
 ```json
 { "schemaVersion": 1, "workflowId": "<id>", "skill": "ship-playbook", "status": "initializing",
@@ -318,9 +337,10 @@ Workflow({ scriptPath: ".../references/workflow-template.js",
                    planHarness, planReview, buildHarness, taskReview, implReview,
                    auditScriptPath, availableAgents, allowGeneralFallback,
                    planPath, kiroModel,
-                   workflowId, statusFile, trackStatus } })   // planPath → RESUME at build; kiroModel → kiro model
-                                                              // (default latest Opus); workflowId/statusFile →
-                                                              // live .ulpi/workflows/<id>.json (trackStatus:false disables)
+                   workflowId, statusFile, trackStatus, checkpointResume } })   // planPath → RESUME at build;
+                                                              // workflowId/statusFile → live .ulpi/workflows/<id>.json
+                                                              // (trackStatus:false disables); checkpointResume:false →
+                                                              // force a full rebuild (default true: skip done tasks)
 ```
 
 **After launch, stamp the run id.** The Workflow tool returns a `runId` (`wf_…`) immediately (it runs in
@@ -387,6 +407,7 @@ launched with (including `workflowId`/`statusFile`).
 
 **Success criteria**: The Workflow runs to completion and returns
 `{ converged, ranReal, plan, planSupplied, build, openRegister, missingAgents, reviewConfig, noReviewGate,
+planReviewRan, implReviewRan, auditRan, workspaceValidatePassed, endStateUngated, blockedTaskCount,
 workflowId, statusFile }`.
 
 ## Phase 3 — Report and escalate
@@ -402,6 +423,16 @@ Read the Workflow result:
 - **If `noReviewGate: true`** (the user skipped BOTH per-task review and impl review), CAVEAT any
   clean verdict: it only means the engineer validates passed, nothing reviewed the build. Report
   `reviewConfig` so the user sees which gates ran.
+- **Gate honesty — a configured gate that did NOT actually run is never "clean".** The Workflow already
+  keeps `openRegister` non-empty (so `converged` is false) when a gate died, but report the cause so the
+  user knows WHY: `planReviewRan === false` / `implReviewRan === false` → the configured plan/impl reviewer
+  couldn't run (e.g. kiro CLI absent); `auditRan === false` → the go-live audit died (launch NOT confirmed);
+  `workspaceValidatePassed === false` → the final `validate` on the integrated tree is RED (it does not
+  typecheck/lint/test — the most load-bearing blocker). `endStateUngated === true` (impl review skipped) →
+  CAVEAT that the whole-codebase semantic end-state was never gated even if the tree compiles.
+- **`blockedTaskCount > 0`** → that many tasks did not pass (engineer-failed, review-blocked, or
+  `dep_blocked` because an upstream dependency never integrated — a `blocked on dependency <X>` reason
+  points at the ROOT). These are in `openRegister`; surface them with their reasons.
 - **If `planSupplied: true`**, the run RESUMED from a pre-reviewed plan: planning and plan-review were
   skipped by design — say so, so a clean verdict isn't misread as "the plan went unreviewed."
 - **`converged: true`** (real run, `openRegister` empty) → DONE. Report the build outcome per task,

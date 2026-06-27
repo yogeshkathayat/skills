@@ -44,6 +44,27 @@ The correct fix for a build task blocked on un-integrated upstream is to fix the
 edges / layer order), caught by plan review and enforced by `validatePlan` — NOT a runtime retry that
 papers over a mis-ordered DAG.
 
+At RUNTIME the build also enforces this directly: it tracks which tasks' code is actually integrated on the
+working branch, and a task only builds once EVERY `dependsOn` is in that set. A task whose dependency
+failed/never-merged is recorded `dep_blocked` (its dependents cascade-block) — one clear root cause, not a
+scatter of failures. A task whose engineer passed but whose merge did NOT land is `dev_done` (code on its
+branch only) and rebuilds on resume; neither `dep_blocked` nor `dev_done` seeds the dependency gate.
+
+## Checkpoint resume + the final validate gate
+
+Resume is **status-file driven**, not cache-based: the build reads `.ulpi/workflows/<id>.json` and skips
+every task already `passed` (skip engineer + review) or on-branch (`integrated`/`reviewing`/`fixing`/
+`blocked` — skip the engineer, re-review with the current reviewer); everything else rebuilds. This is
+durable across template edits (the runtime agent cache is not).
+
+After the build, a **final `VALIDATE_ALL` gate** runs once on the integrated working branch (checking out
+`WORKING_BRANCH` first; excluding `.claude/worktrees/**`). It is the objective end-state truth and is
+resume-safe by construction (runs even when every task was checkpoint-skipped). A non-green result blocks
+convergence even if every per-task review was clean — because slices can each pass their own validate yet
+break the merged tree, and the static reviewers can't catch a cross-file failure. Every gate **fails
+closed**: a died/absent/empty reviewer, a died go-live audit, or a RED final validate is never counted
+clean (`openRegister` stays non-empty), and the run reports which gate did/did not run.
+
 ## Layer-by-layer execution
 
 Process `parallelLayers` in order. A layer's tasks may run concurrently ONLY when their `writeScope`

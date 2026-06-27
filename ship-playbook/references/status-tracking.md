@@ -87,10 +87,27 @@ done | needs_fix | aborted`.
 
 ### Task lifecycle
 `pending → in_progress → dev_done → integrated → (reviewing) → passed | blocked` — plus `dev_failed`
-(engineer validate failed) and `conflicted` (merge aborted). Mapping to plain language: *dev_done* = the
-engineer's slice validates green on its branch; *integrated* = merged onto the working branch; *passed* =
-slice review clean; *blocked* = a real in-scope blocker remains after the fix loop. `crossTaskDeferred` is
-the count of end-state findings this task can't own (another task does) — deliberately NOT blocking.
+(engineer validate failed), `dep_blocked` (a dependency never integrated — see below), and `conflicted`
+(merge aborted). Plain language: *dev_done* = engineer slice validates green BUT its merge did NOT land
+(conflict / integrate failure) — code is on the task branch only, NOT the working branch → it rebuilds on
+resume; *integrated* = merged onto the working branch; *passed* = slice review clean; *blocked* = a real
+in-scope blocker remains after the fix loop; *dep_blocked* = a `dependsOn` task is not yet integrated, so
+this task can't build on a base missing its code (it rebuilds once the dep lands). `crossTaskDeferred` is
+the count of end-state findings this task can't own (another task does) — deliberately NOT blocking the slice.
+
+**Checkpoint resume (the durable kind).** On resume the build reads this file and SKIPS every task whose
+status is `passed` (skip engineer + review) or on-branch (`integrated`/`reviewing`/`fixing`/`blocked` —
+skip the engineer, RE-REVIEW with the current reviewer); everything else (`pending`/`dev_failed`/`dev_done`/
+`dep_blocked`/`building`) rebuilds. Only statuses that PROVE the code reached the working branch seed the
+dependency gate — `dev_done` and `dep_blocked` do NOT (their code isn't on the branch). This is durable
+(status-file driven), independent of the runtime's agent cache, which any template edit invalidates.
+
+**Final workspace-validate gate.** After the build, the run re-runs `VALIDATE_ALL` once on the integrated
+working branch (resume-safe: it runs even when every task was checkpoint-skipped). A non-green result
+blocks convergence — slices can each pass their own validate yet break the merged tree, and the static
+reviewers can't catch that. A died/absent/empty/RED gate (any reviewer, the audit, or this validate) is
+never counted clean; the return carries `planReviewRan`/`implReviewRan`/`auditRan`/`workspaceValidatePassed`/
+`endStateUngated` so the skill reports the cause.
 
 > Note: this workflow merges each task branch onto the **working branch** during the build (the
 > *integrated* state). A final merge to `main` / opening a PR is out of scope here — use `create-pr`

@@ -180,11 +180,16 @@ if (_missing.length) {
 // Route ONE read-only review to whichever executor a role picked: native claude, codex, or kiro.
 // codex → the codex plugin agent; kiro → the kiro-review skill driving the Kiro CLI (never a silent
 // native substitute). The brief carries the actual review instructions; this just picks the executor.
-function routeReview(who, brief, label, phaseTitle) {
-  if (who === 'codex')
-    return rAgent(`READ-ONLY review — do NOT edit.\n${brief}`, { label, phase: phaseTitle, schema: FINDINGS, agentType: 'codex:codex-rescue' })
+const isAgentNotFound = (e) => /agent type .*not found|not a valid agent|unknown agent|no such agent|available agents:/i.test(String((e && e.message) || e))
+async function routeReview(who, brief, label, phaseTitle) {
+  if (who === 'codex') {
+    // codex review: if the codex plugin isn't installed here, agent() throws "agent type not found" —
+    // catch it and return null (→ a NON-run gate / died-reviewer marker) instead of crashing the run.
+    try { return await rAgent(`READ-ONLY review — do NOT edit. If you cannot drive the codex CLI here, return \`gateNotRun: true\` (verdict 'blocked', empty findings) — do NOT return a clean result.\n${brief}`, { label, phase: phaseTitle, schema: FINDINGS, agentType: 'codex:codex-rescue' }) }
+    catch (e) { if (isAgentNotFound(e)) { log(`codex reviewer not available — recording as a non-run gate`); return null } throw e }
+  }
   if (who === 'kiro')
-    return rAgent(`Use the kiro-review skill (\`/kiro-review\`) to drive the Kiro CLI over the surface below, READ-ONLY — do NOT edit; run kiro with \`--model ${KIRO_MODEL}\` (latest Opus). If the Kiro CLI is unavailable, say so and return an empty findings list; do NOT substitute your own native review.\n${brief}`, { label, phase: phaseTitle, schema: FINDINGS, agentType: 'general-purpose' })
+    return rAgent(`Use the kiro-review skill (\`/kiro-review\`) to drive the Kiro CLI over the surface below, READ-ONLY — do NOT edit; run kiro with \`--model ${KIRO_MODEL}\` (latest Opus). If the Kiro CLI is unavailable, return \`gateNotRun: true\` (with verdict 'blocked', empty findings) — do NOT substitute your own native review and do NOT return a clean/empty result that would count as a passed gate.\n${brief}`, { label, phase: phaseTitle, schema: FINDINGS, agentType: 'general-purpose' })
   return rAgent(`${brief}\n(native claude)`, { label, phase: phaseTitle, schema: FINDINGS })   // native
 }
 const rank = { BLOCK: 3, CONCERN: 2, OBSERVATION: 1 }
@@ -257,6 +262,7 @@ const FINDINGS = {
         },
       },
     },
+    gateNotRun: { type: 'boolean' },   // TRUE ⇒ the configured reviewer (e.g. kiro CLI) could NOT run — must count as a NON-run gate, never clean
   },
 }
 const FIX_RESULT = { type: 'object', additionalProperties: false, required: ['applied'], properties: { applied: { type: 'boolean' }, notes: { type: 'string' } } }
@@ -296,6 +302,19 @@ async function statusStep(patch, label) {
   catch (e) { log(`status update "${label}" failed (non-fatal): ${String((e && e.message) || e)}`) }
 }
 
+// ── checkpoint resume: read the status file we maintain and SKIP work already marked done ─────────
+// This is DURABLE resume that does NOT depend on the runtime's agent-result cache (which any template
+// edit or plan re-normalization invalidates, forcing a full rebuild). At build start, read the per-task
+// status from the status file; buildPlan then skips rebuilding anything already done. Off when there's no
+// status file or CFG.checkpointResume === false (then it's a normal full build).
+const CHECKPOINT_RESUME = TRACK_STATUS && CFG.checkpointResume !== false
+const CHECKPOINT_SCHEMA = { type: 'object', additionalProperties: false, required: ['tasks'], properties: { tasks: { type: 'object', additionalProperties: { type: 'string' } }, detail: { type: 'string' } } }
+async function readCheckpoints() {
+  if (!CHECKPOINT_RESUME) return {}
+  const r = await rAgent(`READ-ONLY checkpoint read for a ship-playbook RESUME — do NOT modify anything. If the status file ${STATUS_FILE} exists, read it and return \`tasks\` = an object mapping each task id to its current .tasks[<id>].status string (e.g. {"TASK-001":"passed","TASK-002":"blocked","TASK-003":"integrated"}). If the file is missing or has no .tasks, return tasks:{}. This lets the build SKIP rebuilding work already marked done.`, { label: 'checkpoints', phase: 'Build', schema: CHECKPOINT_SCHEMA, model: 'haiku', effort: 'low', agentType: 'general-purpose' })
+  return (r && r.tasks) || {}
+}
+
 // ── slice-scoping: a per-task review must judge only the task's OWN slice ─────────
 // Match a finding's file against a task's writeScope (exact file, directory boundary, or simple glob
 // prefix). Used to (a) keep the fix loop from burning rounds on findings the engineer can't touch, and
@@ -304,13 +323,18 @@ async function statusStep(patch, label) {
 function fileInScope(file, writeScope) {
   if (!file) return false
   if (!Array.isArray(writeScope) || !writeScope.length) return true
-  const norm = (s) => String(s).replace(/^\.\//, '').replace(/^\/+/, '').replace(/\/+$/, '')
-  const f = norm(file)
-  return writeScope.some(w => {
-    let p = norm(w)
+  const norm = (s) => String(s).replace(/^\.\//, '').replace(/^\/+/, '').replace(/\/+$/, '').replace(/^\.$/, '')
+  const root = norm(ROOT)
+  const stripRoot = (s) => (root && s.startsWith(root + '/')) ? s.slice(root.length + 1) : s   // absolute → repo-relative
+  const f = stripRoot(norm(file))
+  const scopes = writeScope.map(w => stripRoot(norm(w))).filter(Boolean)   // strip ROOT from BOTH sides; drop empty/'/'/'.'-only
+  if (!scopes.length) return true                                     // no real scope → don't over-filter (never swallow a finding)
+  return scopes.some(p => {
     const star = p.indexOf('*')
-    if (star >= 0) { p = p.slice(0, star); return p ? f.startsWith(p) : false }   // glob → prefix match
-    return f === p || f.startsWith(p + '/')                                       // file, or directory boundary
+    if (star < 0) return f === p || f.startsWith(p + '/')              // exact file, or directory boundary
+    const pre = p.slice(0, star)                                       // literal prefix before the first '*'
+    const suf = p.slice(p.lastIndexOf('*') + 1)                        // literal suffix after the last '*'
+    return f.startsWith(pre) && f.endsWith(suf)                        // simple glob: prefix AND suffix (never all-false on a leading '*')
   })
 }
 const isBlocking = (f) => f && (f.severity === 'BLOCK' || f.severity === 'CONCERN')
@@ -383,6 +407,7 @@ ${t.description || ''}
 ${t.stackSkill ? `If the ${t.stackSkill} skill is available here, you MUST use it and honor its rules; if it is not installed, proceed on your own best-practice rubric and note that in your report.` : ''}
 Work in THIS isolated worktree. Base your task branch on the latest integrated state:
   git checkout -B ${branchFor(t)} ${WORKING_BRANCH}
+${(t.dependsOn && t.dependsOn.length) ? `Your dependencies (${t.dependsOn.join(', ')}) are ALREADY merged into ${WORKING_BRANCH} — the build verified this before launching you, so their tables/rows/routes/exports exist in your branch. BUILD ON them; do NOT re-create or stub them, and import/consume them as the real thing.` : ''}
 Edit ONLY: ${(t.writeScope || []).join(', ')}. Honor the locked rules: ${HARD_RULES}.
 Meet ALL acceptance criteria: ${(t.acceptance || []).join(' | ')}.
 Make this pass: ${t.validate}. Then commit:
@@ -408,13 +433,16 @@ the project sources (add \`--ignore-pattern '.claude/**'\`, exclude in the tscon
 to the changed paths) — leftover/transient worktrees must never fail the gate, and never relax any
 other lint/type rule to make it pass.
 
-Report merged[], conflicted[], validatePassed.`
+Report merged[] and conflicted[] using the EXACT branch names listed above, verbatim (e.g. wf/build/TASK-001) — one entry per branch, in merged[] if it merged cleanly or conflicted[] if you aborted it. Also report validatePassed.`
 }
 function reviewerBrief(t, plan) {
   return `READ-ONLY review of ${t.id} (${t.title || ''}) as it now stands on ${WORKING_BRANCH} in ${ROOT}.
-SCOPE — review ONLY this task's OWN slice: its writeScope (${(t.writeScope || []).join(', ')}) and its diff
-(e.g. git diff ${WORKING_BRANCH}~1...${WORKING_BRANCH}, or git log for ${t.id}). Judge it against ${t.id}'s
-OWN acceptance criteria, verifying each is truly met not just claimed: ${(t.acceptance || []).join(' | ')}.
+SCOPE — review ONLY this task's OWN slice, judged from its CURRENT integrated state (NOT a single stale commit):
+  read the current content of its writeScope files (e.g. \`git -C ${ROOT} show ${WORKING_BRANCH}:<file>\` or open them), and
+  list its commits with \`git -C ${ROOT} log --oneline --grep="^${t.id}:" -- ${(t.writeScope || []).join(' ')}\`
+  (there may be an initial commit AND later \`${t.id}: fix#N\` commits — review the LATEST state, never just the first commit).
+Do NOT review files outside ${(t.writeScope || []).join(', ')} — those belong to other tasks. Judge ${t.id}
+against its OWN acceptance criteria, verifying each is truly met not just claimed: ${(t.acceptance || []).join(' | ')}.
 ${otherTasksBrief(plan, t)}
 CRITICAL — do NOT block this task because the whole-codebase END-STATE is not yet reached. The build lands
 one slice at a time, so when you review ${t.id} the tree is half-migrated. If a locked/end-state invariant
@@ -439,7 +467,9 @@ function fixBrief(t, findings, n) {
   return `Fix ${t.id} for these reviewer findings. In THIS isolated worktree, branch off the latest:
   git checkout -B ${fixBranchFor(t, n)} ${WORKING_BRANCH}
 Edit ONLY ${(t.writeScope || []).join(', ')}. ${t.stackSkill ? `Use the ${t.stackSkill} skill. ` : ''}Make
-${t.validate} pass, then commit. Findings: ${JSON.stringify(findings)}. Report status/validatePassed/filesTouched.`
+${t.validate} pass, then commit with a ${t.id}:-prefixed message so the reviewer can find this fix:
+  git add -A && git commit -m "${t.id}: fix${n} — <one-line summary>"
+Findings: ${JSON.stringify(findings)}. Report status/validatePassed/filesTouched.`
 }
 const implBrief = (plan) => `Full implementation review of everything built for ${plan.planName} on
 ${WORKING_BRANCH} in ${ROOT}, against the plan and the hard rules (${HARD_RULES}).
@@ -462,9 +492,12 @@ run in this sandbox is an OBSERVATION, NEVER a BLOCK or CONCERN. verdict + findi
 BLOCK/CONCERN/OBSERVATION with file:line + evidence (sandbox/environment limits = OBSERVATION).`
 
 // run a single read-only review by the chosen executor (who ∈ native|codex|kiro), tagging the source.
+// Returns NULL when the reviewer agent DIED (so the caller can distinguish "did not run" from "ran clean"
+// — a died configured reviewer must never count as a clean gate); otherwise the (possibly empty) findings.
 async function reviewOnce(who, label, phaseTitle, brief) {
   const r = await routeReview(who, brief, `${label}:${who}`, phaseTitle)
-  return (r && r.findings) ? r.findings.map(f => ({ ...f, source: who })) : []
+  if (!r || r.gateNotRun) return null   // agent died OR the configured reviewer (e.g. kiro CLI) could not run ⇒ NOT a clean gate
+  return (r.findings || []).map(f => ({ ...f, source: who }))
 }
 
 // adversarial verify (go-live-audit pattern): refute by CODE; BLOCK also refuted by SPEC. Keep a
@@ -487,16 +520,26 @@ async function verifyFinding(f, phaseTitle) {
 }
 
 // ingest the composed go-live-audit result (its severities: blocker/high/medium/low; statuses:
-// confirmed/uncertain/rejected) into the playbook register schema.
-function ingestGoLive(result) {
+// confirmed/uncertain/rejected). Finder FINDINGS are refutable code claims → go through dedupVerify.
+// GATE failures (a typecheck/test/lint/build command that exited non-zero) are command FACTS, not code
+// claims — they must BYPASS adversarial refute (else a verifier can drop a real failed launch gate into a
+// clean verdict), so they're returned separately as non-refutable markers.
+function ingestGoLiveFindings(result) {
   const sev = { blocker: 'BLOCK', high: 'CONCERN', medium: 'OBSERVATION', low: 'OBSERVATION' }
-  const fromFindings = (result && result.findings ? result.findings : [])
+  return (result && result.findings ? result.findings : [])
     .filter(f => f.status !== 'rejected')
     .map(f => ({ severity: sev[f.severity] || 'OBSERVATION', file: f.file, line: f.line, issue: f.title, evidence: f.evidence, source: 'native', phase: 'audit' }))
-  const fromGates = (result && result.gates ? result.gates : [])
+}
+function ingestGoLiveGateMarkers(result) {
+  return (result && result.gates ? result.gates : [])
     .filter(g => g && g.passed === false)
-    .flatMap(g => (g.failures || []).map(x => ({ severity: 'BLOCK', file: x.member, issue: `${g.gate} gate failed: ${x.detail}`, source: 'native', phase: 'audit' })))
-  return [...fromFindings, ...fromGates]
+    .flatMap(g => {
+      const fails = g.failures || []
+      // a failed gate with NO itemized failures (e.g. its agent died: passed:false, failures:[]) must
+      // still emit a marker — otherwise the failed launch gate is silently dropped → false converged.
+      if (!fails.length) return [{ severity: 'BLOCK', file: g.gate, issue: `${g.gate} gate failed: ${g.summary || 'gate did not complete / no detail reported'}`, source: 'native', phase: 'audit', blockedTask: true }]
+      return fails.map(x => ({ severity: 'BLOCK', file: x.member, issue: `${g.gate} gate failed: ${x.detail}`, source: 'native', phase: 'audit', blockedTask: true }))
+    })
 }
 
 // ── plan review by the chosen reviewer (native|codex|kiro) — bounded; exits clean OR non-convergence ──
@@ -508,13 +551,15 @@ async function planReviewLoop(plan, who) {
   let prev = Infinity
   for (let i = 0; i < MAX_REVIEW; i++) {
     const r = await routeReview(who, founderBrief(plan, who), `plan-review:${who}:${i}`, 'Plan review')
-    if (!r) return
+    if (!r) return { ran: false }                      // reviewer agent died → the plan gate did NOT run
+    if (r.gateNotRun) return { ran: false }            // configured reviewer (e.g. kiro CLI) could not run → NOT a clean/approved plan
     const n = blockingCount(r.findings)
-    if (r.verdict === 'approve' || n === 0) return     // clean — OBSERVATIONs never block
-    if (n >= prev) return                              // not improving → stop churning, proceed to build
+    if (r.verdict === 'approve' || n === 0) return { ran: true }     // clean — OBSERVATIONs never block
+    if (n >= prev) return { ran: true }                // not improving → stop churning, proceed to build
     prev = n
     await rAgent(planFixBrief(plan, r.findings), { label: `plan-fix:${i}`, phase: 'Plan review', schema: FIX_RESULT })   // fix is always native
   }
+  return { ran: true }
 }
 
 // ── worktree hygiene: prune dangling build worktrees ────────────────────────────
@@ -551,59 +596,112 @@ function buildSpawn(t, brief, label) {
 function taskReviewSpawn(t, brief, label) {
   return agentGate(() => {
   if (TASK_REVIEW === 'codex')
-    return spawnSpecialist(`READ-ONLY review — do NOT edit.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'codex:codex-rescue' })
+    return spawnSpecialist(`READ-ONLY review — do NOT edit. If you cannot drive the codex CLI here, return \`gateNotRun: true\` (verdict 'blocked', empty findings) — do NOT return a clean result.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'codex:codex-rescue' })
   if (TASK_REVIEW === 'kiro')
-    return spawnSpecialist(`Use the kiro-review skill (\`/kiro-review\`) to review this task via the Kiro CLI, READ-ONLY, with \`--model ${KIRO_MODEL}\` (latest Opus); if the Kiro CLI is unavailable, say so and return empty findings — do not substitute a native review.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'general-purpose' })
+    return spawnSpecialist(`Use the kiro-review skill (\`/kiro-review\`) to review this task via the Kiro CLI, READ-ONLY, with \`--model ${KIRO_MODEL}\` (latest Opus); if the Kiro CLI is unavailable, return \`gateNotRun: true\` (verdict 'blocked', empty findings) — do NOT substitute a native review and do NOT return a clean result.\n${brief}`, { label, phase: 'Build', schema: FINDINGS, agentType: 'general-purpose' })
   return spawnSpecialist(brief, { label, phase: 'Build', schema: FINDINGS, agentType: resolveAgent(t.reviewer) })   // native
   })
 }
 
 // ── steps 10–11: build across DAG layers, engineer → integrate → reviewer → fix ──
-async function buildPlan(plan) {
+// CHECKPOINT RESUME: `prior` is the per-task status read from the status file at build start. A task the
+// status file marks done is NOT rebuilt — durable resume independent of the runtime's agent cache. Per task:
+//   • 'passed' → skip the engineer AND the review (fully done; re-record it).
+//   • on-branch ('integrated'|'reviewing'|'fixing'|'blocked' — code proven ON WORKING_BRANCH) → skip the
+//     ENGINEER, RE-REVIEW with the current reviewer (rescues ex-false-blocks WITHOUT a rebuild).
+//   • everything else ('pending'|'dev_failed'|'dev_done'|'dep_blocked'|'building'|unknown) → build it.
+//     'dev_done' = engineer passed but the merge did NOT land; 'dep_blocked' = never built. Neither is on
+//     the branch, so both rebuild on resume and NEVER seed the dependency gate.
+async function buildPlan(plan, prior) {
   const byId = new Map(plan.tasks.map(t => [t.id, t]))
-  const layers = (plan.layers && plan.layers.length) ? plan.layers : [plan.tasks.map(t => t.id)]
+  // derive layers topologically from dependsOn when the plan has none (never collapse deps into one layer)
+  const layers = (plan.layers && plan.layers.length) ? plan.layers : (topoLayers(plan.tasks) || [plan.tasks.map(t => t.id)])
   const N = layers.length
-  const log = []
-  // in-scope blockers only: BLOCK/CONCERN whose file the task can actually touch. Findings outside
-  // writeScope are end-state gaps another task owns — they must NOT drive ${t}'s fix loop (the engineer
-  // can't edit them) and must NOT block the slice. They're deferred to the impl-review end-state gate.
+  const out = []
   const inScopeBlockers = (review, t) => (review.findings || []).filter(f => isBlocking(f) && fileInScope(f.file, t.writeScope))
   const crossTaskCount = (review, t) => (review.findings || []).filter(f => isBlocking(f) && !fileInScope(f.file, t.writeScope)).length
+  const priorOf = (id) => (prior && prior[id]) || null
+  // ON_BRANCH = statuses that PROVE the task's code reached WORKING_BRANCH. NOT 'dev_done' (engineer
+  // passed but merge failed → code on its task branch only) and NOT 'dep_blocked' (never built).
+  const ON_BRANCH = new Set(['integrated', 'reviewing', 'fixing', 'blocked'])
+  // DAG DEPENDENCY GATE — `integrated` = tasks whose code is actually ON the working branch a task cuts
+  // from. Seeded from checkpoint tasks proven on-branch; this run's integrations are added as they land.
+  // A task builds ONLY once every dependsOn is in this set — never on a branch missing the code it needs.
+  const integrated = new Set(plan.tasks.filter(t => priorOf(t.id) === 'passed' || ON_BRANCH.has(priorOf(t.id))).map(t => t.id))
+  const missingDeps = (t) => (t.dependsOn || []).filter(d => !integrated.has(d))
+  let nDone = 0, nReReview = 0, nDepBlocked = 0
 
   for (let li = 0; li < N; li++) {
     const layer = layers[li].map(id => byId.get(id)).filter(Boolean)
-    // mark the whole layer in_progress before the engineers fan out (sequential → race-free)
+    const layerPatch = {}
+    // CHECKPOINT partition (status file is the source of truth for "already done")
+    const doneSkip = layer.filter(t => priorOf(t.id) === 'passed')                         // skip entirely
+    const onBranch = layer.filter(t => ON_BRANCH.has(priorOf(t.id)))                        // skip engineer, re-review
+    const fresh = layer.filter(t => priorOf(t.id) !== 'passed' && !ON_BRANCH.has(priorOf(t.id)))
+    // DAG GATE: a fresh task may build ONLY if every dependency is already integrated on WORKING_BRANCH.
+    // A task with an un-integrated dep is recorded 'dep_blocked' (pointing at the ROOT) and NOT built; its
+    // dependents cascade-block. 'dep_blocked' is not on-branch, so on resume it re-evaluates (rebuilds
+    // once the dep lands) — and is NEVER seeded into the dependency gate.
+    const depBlocked = fresh.filter(t => missingDeps(t).length > 0)
+    const toBuild = fresh.filter(t => missingDeps(t).length === 0)
+    for (const t of doneSkip) { out.push({ task: t.id, status: 'passed', fixes: 0, findings: [], resumed: true }); layerPatch[t.id] = { status: 'passed' }; nDone++ }
+    for (const t of depBlocked) {
+      const miss = missingDeps(t)
+      out.push({ task: t.id, status: 'blocked', reason: `dependency not integrated: ${miss.join(', ')} — its code is not on ${WORKING_BRANCH}, so ${t.id} cannot be built on it; fix the upstream task first`, fixes: 0, findings: [], blockedOn: miss })
+      layerPatch[t.id] = { status: 'dep_blocked', blockedOn: miss }   // distinct from review-'blocked'; NOT on-branch
+      nDepBlocked++
+    }
+    nReReview += onBranch.length
+
+    // mark ONLY the tasks we'll actually build as in_progress (never reset a skipped/dep-blocked task)
     await statusStep({ status: 'building', phases: { build: { status: 'in_progress', layer: `${li + 1}/${N}` } },
-      tasks: Object.fromEntries(layer.map(t => [t.id, { status: 'in_progress' }])) }, `L${li}-start`)
-    // engineers implement in parallel (isolated worktrees, disjoint write scope), each on a task branch
-    const built = await parallel(layer.map(t => () =>
-      buildSpawn(t, engineerBrief(t), `build:${t.id}`).then(r => ({ t, r }))))
-    // in-workflow git integrate: merge passed task branches onto the working branch (one sequential agent)
+      tasks: Object.fromEntries(toBuild.map(t => [t.id, { status: 'in_progress' }])) }, `L${li}-start`)
+
+    // engineers build ONLY the not-yet-done, dependency-satisfied tasks (parallel, isolated worktrees).
+    // onRejected → {t, r:null} so a THROWN engineer is recorded dev_failed (not dependent on parallel()'s null-substitution).
+    const built = await parallel(toBuild.map(t => () =>
+      buildSpawn(t, engineerBrief(t), `build:${t.id}`).then(r => ({ t, r }), () => ({ t, r: null }))))
     const passedBranches = built.filter(b => b && b.r && b.r.status === 'passed').map(b => branchFor(b.t))
     let integ = null
     if (passedBranches.length) integ = await rAgent(integrateBrief(passedBranches), { label: `integrate:L${li}`, phase: 'Build', schema: INTEGRATE_RESULT })
-    const mergedBranches = new Set((integ && integ.merged) || [])
-    // engineer-failed tasks are blocked outright
-    const layerPatch = {}
+    // match a task's branch against the integrate agent's reported merged[] by the branch we CREATED
+    // (branchFor(t)) or the bare id — id-agnostic (works for any id format) and tolerant of formatting.
+    const mergedRaw = ((integ && integ.merged) || []).map(s => String(s).trim())
+    const isMerged = (t) => mergedRaw.some(m => m === branchFor(t) || m === t.id || m.endsWith('/' + t.id))
     for (const b of built.filter(b => b && (!b.r || b.r.status !== 'passed'))) {
-      log.push({ task: b.t.id, status: 'blocked', reason: 'engineer validate failed', fixes: 0, findings: [] })
+      out.push({ task: b.t.id, status: 'blocked', reason: 'engineer validate failed', fixes: 0, findings: [] })
       layerPatch[b.t.id] = { status: 'dev_failed' }
     }
-    const passed = built.filter(b => b && b.r && b.r.status === 'passed')
-    for (const b of passed) layerPatch[b.t.id] = { status: mergedBranches.has(branchFor(b.t)) ? 'integrated' : 'dev_done' }
-    // TASK_REVIEW === 'skip' (#2): no per-task reviewer / fix loop — a task passes on its engineer
-    // validate alone. Biggest token saver; the user opted out of per-task review.
+    // any toBuild task whose engineer agent errored outright (no result object) — record it, don't lose it
+    const seen = new Set(built.filter(Boolean).map(b => b.t.id))
+    for (const t of toBuild) if (!seen.has(t.id)) { out.push({ task: t.id, status: 'blocked', reason: 'engineer agent errored (no result)', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'dev_failed' } }
+    // a builtPassed task counts as on-branch ONLY if its branch actually merged; an unmerged one (conflict
+    // / null integrate) is recorded 'dev_done' (rebuilds on resume) and is NOT reviewed or seeded as a dep.
+    const onBranchNow = []
+    for (const b of built.filter(b => b && b.r && b.r.status === 'passed')) {
+      if (isMerged(b.t)) { integrated.add(b.t.id); onBranchNow.push(b.t); layerPatch[b.t.id] = { status: 'integrated' } }
+      else { out.push({ task: b.t.id, status: 'blocked', reason: `engineer passed but the merge did not land (conflict / integrate failure) — ${b.t.id}'s code is on its task branch only, not on ${WORKING_BRANCH}`, fixes: 0, findings: [] }); layerPatch[b.t.id] = { status: 'dev_done' } }
+    }
+    // (the integrate agent runs VALIDATE_ALL per layer for early signal, but the AUTHORITATIVE,
+    // resume-safe workspace check is the FINAL validate gate after the build — see below. A per-layer
+    // synthetic blocker here would not survive a checkpoint resume, so convergence does not rest on it.)
+
+    // review set = THIS layer's freshly-integrated tasks + the on-branch tasks we skipped rebuilding — all
+    // have code on WORKING_BRANCH. Unmerged 'dev_done' tasks are excluded (nothing on the branch to review).
+    const reviewSet = [...onBranchNow, ...onBranch]
+    // TASK_REVIEW === 'skip': no per-task reviewer — a task passes on its engineer validate + a real merge.
     if (TASK_REVIEW === 'skip') {
-      for (const b of passed) { log.push({ task: b.t.id, status: 'passed', fixes: 0, findings: [] }); layerPatch[b.t.id] = { status: 'passed' } }
+      for (const t of reviewSet) { out.push({ task: t.id, status: 'passed', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'passed' } }
       await statusStep({ tasks: layerPatch }, `L${li}-done`)
       continue
     }
     await statusStep({ tasks: layerPatch }, `L${li}-built`)
-    // initial per-task reviews are READ-ONLY → run them in PARALLEL across the layer (slice-scoped:
-    // reviewerBrief gets the rest of the plan so end-state gaps are attributed to the owning task)
-    const reviewed = await parallel(passed.map(b => () =>
-      taskReviewSpawn(b.t, reviewerBrief(b.t, plan), `review:${b.t.id}`)
-        .then(r => ({ t: b.t, review: r || { verdict: 'concerns', findings: [] } }))))
+    // initial per-task reviews are READ-ONLY → run them in PARALLEL across the layer (slice-scoped). A
+    // reviewer REJECTION (not just null) is caught here → recorded, never silently dropped.
+    const reviewed = await parallel(reviewSet.map(t => () =>
+      taskReviewSpawn(t, reviewerBrief(t, plan), `review:${t.id}`).then(
+        r => ({ t, review: (r && !r.gateNotRun) ? r : { verdict: 'blocked', findings: [], _errored: true } }),   // NULL/died OR gateNotRun (kiro CLI absent) → blocked, never a silent pass
+        () => ({ t, review: { verdict: 'blocked', findings: [], _errored: true } }))))     // THROW → blocked
     // fix→re-integrate MUST stay SERIAL: each git-merges the shared working branch, so concurrent fix
     // loops would race/conflict on it. The re-review after each integrate sees the updated branch.
     for (const item of reviewed.filter(Boolean)) {
@@ -612,24 +710,35 @@ async function buildPlan(plan) {
       let fixes = 0
       let blockers = inScopeBlockers(review, t)           // ONLY findings this task can act on
       let deferred = crossTaskCount(review, t)
-      // loop only while there are IN-SCOPE blockers — never burn a fix round on an end-state gap a later
-      // task owns (the engineer can't touch it; that's the impl-review gate's job).
-      while (blockers.length && fixes < MAX_FIX) {
-        fixes++
-        await buildSpawn(t, fixBrief(t, blockers, fixes), `fix:${t.id}#${fixes}`)
-        await rAgent(integrateBrief([fixBranchFor(t, fixes)]), { label: `reintegrate:${t.id}#${fixes}`, phase: 'Build', schema: INTEGRATE_RESULT })
-        review = await taskReviewSpawn(t, reviewerBrief(t, plan), `review:${t.id}#${fixes}`) || { verdict: 'concerns', findings: [] }
-        blockers = inScopeBlockers(review, t)
-        deferred = crossTaskCount(review, t)
+      try {
+        while (blockers.length && fixes < MAX_FIX) {
+          fixes++
+          await buildSpawn(t, fixBrief(t, blockers, fixes), `fix:${t.id}#${fixes}`)
+          const reInt = await rAgent(integrateBrief([fixBranchFor(t, fixes)]), { label: `reintegrate:${t.id}#${fixes}`, phase: 'Build', schema: INTEGRATE_RESULT })
+          const rr = await taskReviewSpawn(t, reviewerBrief(t, plan), `review:${t.id}#${fixes}`)
+          review = (rr && !rr.gateNotRun) ? rr : { verdict: 'blocked', findings: [], _errored: true }
+          blockers = inScopeBlockers(review, t)
+          deferred = crossTaskCount(review, t)
+          // the reviewer is told the workspace validate already passed — so if the re-integrate's validate
+          // FAILED, that's a real in-scope blocker the static review won't see; keep the task blocked.
+          if (reInt && reInt.validatePassed === false && !blockers.length) blockers = [{ severity: 'BLOCK', file: t.id, issue: `workspace validate (${VALIDATE_ALL}) failed after re-integrating ${t.id} fix${fixes}` }]
+        }
+      } catch (e) {
+        // a genuine throw in the serial fix loop must NOT crash the whole build — record the task blocked and move on
+        log(`fix loop for ${t.id} errored (non-fatal): ${String((e && e.message) || e)}`)
+        if (!blockers.length) blockers = [{ severity: 'BLOCK', file: t.id, issue: `fix/re-integrate agent errored: ${String((e && e.message) || e)}` }]
       }
-      const status = blockers.length ? 'blocked' : 'passed'
-      // record only in-scope findings as the task's own; cross-task end-state gaps are counted + deferred.
-      log.push({ task: t.id, status, fixes, findings: (review.findings || []).filter(f => fileInScope(f.file, t.writeScope)), crossTaskDeferred: deferred })
+      const status = (blockers.length || review._errored) ? 'blocked' : 'passed'
+      out.push({ task: t.id, status, fixes, findings: (review.findings || []).filter(f => fileInScope(f.file, t.writeScope)), crossTaskDeferred: deferred })
       layerPatch[t.id] = { status, fixes, ...(deferred ? { crossTaskDeferred: deferred } : {}) }
     }
+    // safety net: no integrated task may vanish — any reviewSet task with no `out` entry is recorded blocked
+    const reviewedIds = new Set(out.map(o => o.task))
+    for (const t of reviewSet) if (!reviewedIds.has(t.id)) { out.push({ task: t.id, status: 'blocked', reason: 'reviewer slot lost (no result)', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'blocked' } }
     await statusStep({ tasks: layerPatch }, `L${li}-done`)
   }
-  return log
+  if (nDone || nReReview || nDepBlocked) log(`build: ${nDone} already-passed skipped, ${nReReview} on-branch re-reviewed (no rebuild), ${nDepBlocked} blocked on un-integrated dependencies`)
+  return out
 }
 
 // dedup (keep highest severity per file/line/issue) + dual-lens adversarial verify of the actionable
@@ -664,15 +773,45 @@ if (pre.workingBranchExists === false) {
 // Clear dangling build worktrees from prior runs BEFORE building, so the integrate validate starts clean.
 await cleanupWorktrees('preflight')
 
+// Derive parallel execution layers as a topological sort of dependsOn (by levels). Returns null on a
+// cycle (no valid build order). Only considers in-plan deps. Used when a plan has no explicit layers, so
+// a dependency-bearing plan is still built in correct DAG order instead of collapsed into one layer.
+function topoLayers(tasks) {
+  const ids = new Set(tasks.map(t => t && t.id))
+  const deps = new Map(tasks.map(t => [t.id, (t.dependsOn || []).filter(d => ids.has(d))]))
+  const done = new Set(); const layers = []
+  let remaining = tasks.map(t => t.id)
+  while (remaining.length) {
+    const ready = remaining.filter(id => deps.get(id).every(d => done.has(d)))
+    if (!ready.length) return null            // cycle — no remaining task has all its deps satisfied
+    layers.push(ready)
+    ready.forEach(id => done.add(id))
+    remaining = remaining.filter(id => !done.has(id))
+  }
+  return layers
+}
+
 // Structural sanity check on a plan (supplied OR freshly written) before the build trusts it.
 function validatePlan(p) {
   if (!p || !Array.isArray(p.tasks) || !p.tasks.length) return 'no tasks in the plan — nothing to build (verify the plan/planPath reached the script and the plan has a non-empty tasks[])'
   const ids = new Set(p.tasks.map(t => t && t.id))
   const bad = p.tasks.filter(t => !t || !t.id || !t.agent || !Array.isArray(t.writeScope) || !t.writeScope.length || !t.validate)
   if (bad.length) return `plan has ${bad.length} task(s) missing required build fields (id / agent / writeScope[] / validate) — re-run plan-to-task-list-with-dag or fix the plan json`
+  // dependsOn edges must reference real tasks — checked INDEPENDENTLY of layering so dangling deps never slip through
+  const unknownDeps = [...new Set(p.tasks.flatMap(t => (t && Array.isArray(t.dependsOn) ? t.dependsOn : []).filter(d => !ids.has(d))))]
+  if (unknownDeps.length) return `plan has dependsOn edges referencing unknown task ids: ${unknownDeps.join(', ')} — fix the plan json`
+  const hasDeps = p.tasks.some(t => t && Array.isArray(t.dependsOn) && t.dependsOn.length)
   if (Array.isArray(p.layers) && p.layers.length) {
     const unknown = [...new Set(p.layers.flat().filter(id => !ids.has(id)))]
     if (unknown.length) return `plan layers reference unknown task ids: ${unknown.join(', ')}`
+    // every task MUST be scheduled in some layer, else the build (which only walks layers) silently skips it
+    const flat = p.layers.flat()
+    const covered = new Set(flat)
+    const uncovered = p.tasks.map(t => t && t.id).filter(id => id && !covered.has(id))
+    if (uncovered.length) return `plan layers omit ${uncovered.length} task(s) entirely: ${uncovered.join(', ')} — every task must be scheduled in some layer (in topological order), or it is silently never built`
+    // and EXACTLY once — a duplicated id is built/integrated twice (two engineers on the same branch)
+    const dups = [...new Set(flat.filter((id, i) => flat.indexOf(id) !== i))]
+    if (dups.length) return `plan layers schedule task id(s) more than once: ${dups.join(', ')} — each task must appear in exactly one layer, or the build builds and integrates it multiple times`
     // DAG ordering: the build integrates layer-by-layer, so every task's dependencies MUST sit in a
     // STRICTLY earlier layer. A task scheduled at/before a dep builds on a base where that dep isn't
     // integrated and fails (e.g. "required upstream not integrated"). Reject such a plan rather than
@@ -691,6 +830,10 @@ function validatePlan(p) {
       }
     }
     if (misordered.length) return `plan DAG is mis-ordered — ${misordered.length} task(s) are scheduled before their dependencies, so they would build on a base where required upstream isn't integrated: ${misordered.slice(0, 6).join('; ')}${misordered.length > 6 ? ` … (+${misordered.length - 6} more)` : ''}. Fix the layers (topological order) or the dependsOn edges and re-plan.`
+  } else if (hasDeps && !topoLayers(p.tasks)) {
+    // no explicit layers but there ARE dependencies → the build will derive layers topologically; reject
+    // only if the dependsOn graph has a CYCLE (no valid build order exists).
+    return `plan has dependsOn edges but no layers, and the dependency graph has a CYCLE — no valid build order exists. Break the cycle (merge mutually-dependent tasks) or provide topological layers.`
   }
   return null
 }
@@ -716,68 +859,130 @@ if (RESUME_PLAN) {
   const planPrompt = PLAN_HARNESS === 'kiro'
     ? `Use the Kiro CLI to produce this plan; if it is unavailable, do it yourself.\n${planBrief(PROMPT)}`
     : planBrief(PROMPT)
-  plan = await rAgent(planPrompt, { label: `plan:${PLAN_HARNESS}`, phase: 'Plan', schema: PLAN, agentType: planAgentType })
+  // the plan MUST be written — if codex isn't installed here, fall back to general-purpose rather than crash.
+  try { plan = await rAgent(planPrompt, { label: `plan:${PLAN_HARNESS}`, phase: 'Plan', schema: PLAN, agentType: planAgentType }) }
+  catch (e) {
+    if (PLAN_HARNESS === 'codex' && isAgentNotFound(e)) { log('codex not available for planning — falling back to general-purpose'); plan = await rAgent(planBrief(PROMPT), { label: 'plan:fallback', phase: 'Plan', schema: PLAN, agentType: 'general-purpose' }) }
+    else throw e
+  }
 }
 const _planError = validatePlan(plan)
 if (_planError) {
   await statusStep({ status: 'aborted', phases: { plan: { status: 'failed', detail: _planError } } }, 'plan-failed')
   return { converged: false, ranReal: false, aborted: _planError, goLive: GO_LIVE }
 }
-// Populate the live status file with the adopted plan and every task as pending (one cheap write).
+// Read the CHECKPOINT (prior per-task status) BEFORE writing plan-done — otherwise the plan-done write
+// below would clobber every task back to 'pending' and the resume would rebuild everything. On a fresh
+// run priorStatus is empty ⇒ all tasks seed to 'pending'.
+const priorStatus = await readCheckpoints()
+// Populate the live status file with the adopted plan; seed each task's status from the checkpoint so a
+// resume PRESERVES what's already done (new/unknown tasks default to 'pending').
 await statusStep({
   plan: { name: plan.planName, path: plan.planPath || null, taskCount: plan.tasks.length },
   phases: { plan: { status: RESUME_PLAN ? 'skipped' : 'done' } },
-  tasks: Object.fromEntries(plan.tasks.map(t => [t.id, { title: t.title || '', agent: t.agent || '', branch: branchFor(t), status: 'pending', fixes: 0 }])),
+  tasks: Object.fromEntries(plan.tasks.map(t => [t.id, { title: t.title || '', agent: t.agent || '', branch: branchFor(t), status: priorStatus[t.id] || 'pending' }])),
 }, 'plan-done')
 
 // Plan review (steps 4–9) — SKIPPED when resuming (the supplied plan is already reviewed). Otherwise
 // reviewer per PLAN_REVIEW: 'skip' | 'native' | 'codex' | 'kiro'. Plan-QUALITY gate (scope,
 // decomposition, phantom paths). ONE bounded loop; exits on no BLOCK/CONCERN or non-convergence.
+let planReviewRan = null   // null = skipped/resume; true = the configured plan reviewer ran; false = it could not run (e.g. kiro CLI absent)
 if (!RESUME_PLAN && PLAN_REVIEW !== 'skip') {
   phase('Plan review')
   await statusStep({ status: 'plan_review', phases: { plan_review: { status: 'in_progress' } } }, 'plan-review-start')
-  await planReviewLoop(plan, PLAN_REVIEW)
-  await statusStep({ phases: { plan_review: { status: 'done' } } }, 'plan-review-done')
+  const pr = await planReviewLoop(plan, PLAN_REVIEW)
+  planReviewRan = !!(pr && pr.ran)
+  await statusStep({ phases: { plan_review: { status: planReviewRan ? 'done' : 'errored' } } }, 'plan-review-done')
 } else {
   await statusStep({ phases: { plan_review: { status: 'skipped' } } }, 'plan-review-skip')
 }
 
 phase('Build')                                             // steps 10–11
-const buildLog = await buildPlan(plan)                      // buildPlan emits per-layer status writes
+const buildLog = await buildPlan(plan, priorStatus)        // priorStatus (read above) → skip work already done
 await statusStep({ phases: { build: { status: 'done' } } }, 'build-done')
+
+// FINAL workspace-validate gate — the OBJECTIVE end-state check, and the only one that is RESUME-SAFE by
+// construction: it re-runs VALIDATE_ALL on the final integrated tree regardless of what the checkpoint
+// skipped. Slices can each pass their OWN validate yet break the workspace together (a cross-file type
+// error), and the per-task/impl reviewers are static (told the integrate already validated) — so this
+// command is the one thing that deterministically catches a non-green tree. A non-pass (or a died gate)
+// blocks convergence. This is the "run the full suite on the final branch" gate.
+await cleanupWorktrees('pre-final-validate')   // clear stale build worktrees so the gate measures ONLY the project tree
+const FINAL_VALIDATE_SCHEMA = { type: 'object', additionalProperties: false, required: ['passed'], properties: { passed: { type: 'boolean' }, detail: { type: 'string' } } }
+const fv = await rAgent(`Workspace-validate the integrated tree and report the exit result. Do NOT EDIT source files — but changing git state to check out the branch IS allowed and required.
+1. \`git -C ${ROOT} checkout ${WORKING_BRANCH}\`, then confirm \`git -C ${ROOT} rev-parse --abbrev-ref HEAD\` == ${WORKING_BRANCH} — the tree under test MUST be ${WORKING_BRANCH}, never the repo's incidental HEAD.
+2. Run exactly: ${VALIDATE_ALL}. It must cover ONLY the project at ${ROOT} — never scan \`.claude/worktrees/**\` or sibling agent dirs (\`.factory\`,\`.gemini\`,\`.opencode\`,\`.trae\`,\`.kiro\`,\`.vibe\`). If the configured command would walk them (e.g. \`eslint .\` / \`tsc\` without excludes), restrict it to the project sources (add \`--ignore-pattern '.claude/**'\`, exclude in the tsconfig invocation, or scope to the changed paths) — leftover/transient worktrees must NEVER fail the gate, and never relax any other lint/type rule to make it pass.
+Report passed=true ONLY if ${VALIDATE_ALL} exits 0 on ${WORKING_BRANCH}; else passed=false with the first concrete errors in detail.`, { label: 'final-validate', phase: 'Build', schema: FINAL_VALIDATE_SCHEMA })
+const workspaceValidatePassed = !!(fv && fv.passed === true)   // null (agent died) OR false ⇒ NOT confirmed green
+await statusStep({ phases: { build: { status: 'done', workspaceValidate: workspaceValidatePassed ? 'passed' : 'failed' } } }, 'final-validate')
 
 // Impl review (step 12) — reviewer per IMPL_REVIEW: 'skip' | 'native' | 'codex' | 'kiro'. The
 // plan-vs-implementation gate — and now the EXPLICIT end-state gate (see implBrief).
 let implFindings = []
+let implRan = true   // a configured impl reviewer that DIES is not a clean gate
 if (IMPL_REVIEW !== 'skip') {
   phase('Impl review')
   await statusStep({ status: 'impl_review', phases: { impl_review: { status: 'in_progress' } } }, 'impl-start')
-  implFindings = await reviewOnce(IMPL_REVIEW, 'impl', 'Impl review', implBrief(plan))
-  await statusStep({ phases: { impl_review: { status: 'done', findings: implFindings.length } } }, 'impl-done')
+  const r = await reviewOnce(IMPL_REVIEW, 'impl', 'Impl review', implBrief(plan))   // null = agent died
+  implRan = r !== null
+  implFindings = r || []
+  await statusStep({ phases: { impl_review: { status: implRan ? 'done' : 'errored', findings: implFindings.length } } }, 'impl-done')
 } else {
   await statusStep({ phases: { impl_review: { status: 'skipped' } } }, 'impl-skip')
 }
 
-// Verify (step 14): dedup + adversarially verify the build+impl findings → this is the feedback.
+// Verify (step 14): dedup + adversarially verify the REAL findings → this is the feedback.
 phase('Verify')
 await statusStep({ status: 'verifying', phases: { verify: { status: 'in_progress' } } }, 'verify-start')
-const blockedBuild = buildLog.filter(b => b.status === 'blocked').flatMap(b =>
-  (b.findings.length ? b.findings : [{ severity: 'BLOCK', file: b.task, issue: `task ${b.task} did not pass after ${b.fixes} fixes` }]).map(f => ({ ...f, source: 'native', phase: 'build' })))
-// The go-live audit (step 13) is the heaviest phase — run it ONLY when build+impl are verified-clean.
-// An implementation with open findings goes straight back to the user as feedback (no point auditing
-// code that still needs fixes).
-let openRegister = await dedupVerify([...blockedBuild, ...implFindings.map(f => ({ ...f, phase: 'impl' }))], 'Verify')
+const blockedTasks = buildLog.filter(b => b.status === 'blocked')
+// Only REAL findings (reviewer findings on blocked tasks + impl findings) go through adversarial refute —
+// a code/spec verifier can legitimately check those. A blocked task itself is a build FACT, not a
+// refutable code claim (its `file` is a task id, not a path; a dep_blocked task ran NO code), so it must
+// NOT be refutable into a clean verdict. We append a marker per blocked task AFTER verification.
+const realFindings = [
+  ...blockedTasks.flatMap(b => (b.findings || []).map(f => ({ ...f, source: 'native', phase: 'build' }))),
+  ...implFindings.map(f => ({ ...f, phase: 'impl' })),
+]
+let openRegister = await dedupVerify(realFindings, 'Verify')
+// non-refutable markers (NOT routed through adversarial verify): blocked tasks + a died impl reviewer +
+// a non-green final workspace validate. These are FACTS — a code/spec refuter cannot argue them away.
+const markers = blockedTasks.map(b => ({ severity: 'BLOCK', file: b.task, issue: b.reason || `task ${b.task} did not pass after ${b.fixes || 0} fixes`, source: 'native', phase: 'build', blockedTask: true }))
+if (!implRan) markers.push({ severity: 'BLOCK', file: 'impl-review', issue: `impl review (${IMPL_REVIEW}) did not produce a verdict — its agent died; the plan-vs-implementation gate was NOT run`, source: 'native', phase: 'impl', blockedTask: true })
+if (!workspaceValidatePassed) markers.push({ severity: 'BLOCK', file: 'workspace-validate', issue: `workspace validate (${VALIDATE_ALL}) did not pass green on ${WORKING_BRANCH}${fv && fv.detail ? ': ' + fv.detail : ' (gate agent died — not confirmed)'} — the integrated tree is not green`, source: 'native', phase: 'build', blockedTask: true })
+openRegister = [...openRegister, ...markers]   // blocked tasks / a dead gate / a non-green tree ALWAYS keep the register non-empty → never a false converged
+// Whole-codebase SEMANTIC end-state (legacy paths removed, routes wired) is gated ONLY by impl review;
+// with impl review skipped it is unverified even if the tree compiles — surfaced as a caveat (config-
+// derived ⇒ resume-safe), not a hard block, since the user opted out of that gate.
+const endStateUngated = IMPL_REVIEW === 'skip'
+// The go-live audit (step 13) is the heaviest phase — run it ONLY when build+impl are verified-clean AND
+// no task is blocked. An implementation with open findings/blocked tasks goes straight back as feedback.
 await statusStep({ phases: { verify: { status: 'done', findings: openRegister.length } }, openRegister }, 'verify-done')
+let auditRan = null   // null = not attempted; true = produced a verdict; false = died/aborted
 if (openRegister.length === 0 && GO_LIVE) {                // step 13 — only when build+impl are clean
   phase('Audit')
   await statusStep({ status: 'auditing', phases: { audit: { status: 'in_progress' } } }, 'audit-start')
   // COMPOSE the proven go-live-audit workflow (a thorough multi-agent native audit) when the skill
-  // supplied a filled script; otherwise an inline native finder pass.
-  const auditFindings = AUDIT_SCRIPT_PATH
-    ? ingestGoLive(await workflow({ scriptPath: AUDIT_SCRIPT_PATH }))
-    : await reviewOnce('native', 'audit', 'Audit', auditBrief)
+  // supplied a filled script; otherwise an inline native finder pass. A DIED audit is NOT a clean audit.
+  let auditFindings = []
+  let auditGateMarkers = []   // failed launch-gate FACTS — appended after dedupVerify, never refuted
+  if (AUDIT_SCRIPT_PATH) {
+    // guard the heaviest phase: a throw (composed-script error / non-rate-limit sub-agent death) must be
+    // treated as a DIED audit (→ the L966 marker), never crash the run after an otherwise-clean build.
+    let result = null
+    try { result = await withRetry(() => workflow({ scriptPath: AUDIT_SCRIPT_PATH }), 'go-live-audit') }
+    catch (e) { log(`go-live audit workflow threw (treating as died): ${String((e && e.message) || e)}`); result = null }
+    auditRan = !!(result && !result.aborted && (('findings' in result) || ('gates' in result)))
+    auditFindings = auditRan ? ingestGoLiveFindings(result) : []
+    auditGateMarkers = auditRan ? ingestGoLiveGateMarkers(result) : []
+  } else {
+    const r = await reviewOnce('native', 'audit', 'Audit', auditBrief)   // null = agent died
+    auditRan = r !== null
+    auditFindings = r || []
+  }
   openRegister = await dedupVerify(auditFindings.map(f => ({ ...f, phase: 'audit' })), 'Verify')
-  await statusStep({ phases: { audit: { status: 'done', findings: openRegister.length } }, openRegister }, 'audit-done')
+  openRegister = [...openRegister, ...auditGateMarkers]   // a failed launch gate can never be refuted into clean
+  if (!auditRan) openRegister = [...openRegister, { severity: 'BLOCK', file: 'go-live-audit', issue: 'go-live audit did not produce a verdict (agent/workflow died or aborted) — launch readiness NOT confirmed', source: 'native', phase: 'audit', blockedTask: true }]
+  await statusStep({ phases: { audit: { status: auditRan ? 'done' : 'errored', findings: openRegister.length } }, openRegister }, 'audit-done')
 } else {
   await statusStep({ phases: { audit: { status: 'skipped', detail: GO_LIVE ? 'findings remain' : 'goLive off' } } }, 'audit-skip')
 }
@@ -791,7 +996,8 @@ await statusStep({
   result: {
     converged: openRegister.length === 0,
     openRegisterCount: openRegister.length,
-    build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes })),
+    workspaceValidatePassed, endStateUngated,
+    build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes, ...(b.crossTaskDeferred ? { crossTaskDeferred: b.crossTaskDeferred } : {}) })),
     reviewConfig: { planHarness: PLAN_HARNESS, planReview: PLAN_REVIEW, buildHarness: BUILD_HARNESS, taskReview: TASK_REVIEW, implReview: IMPL_REVIEW },
     missingAgents: [...missingAgents],
   },
@@ -804,7 +1010,7 @@ return {
   ranReal: true,
   plan: plan.planName,
   planSupplied: RESUME_PLAN,    // TRUE when this run RESUMED from a pre-built/pre-reviewed plan (plan + plan-review skipped)
-  build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes })),
+  build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes, ...(b.crossTaskDeferred ? { crossTaskDeferred: b.crossTaskDeferred } : {}) })),
   openRegister,                 // verified findings = the feedback to show the user
   missingAgents: [...missingAgents],   // specialist agent types the plan wanted that aren't installed here → skill notifies the user
   // the review/build roles this run used (so the skill can report them honestly and caveat the verdict)
@@ -812,6 +1018,12 @@ return {
   // TRUE when NOTHING checked the build: no per-task reviewer AND no impl review. converged then means
   // "engineer validates passed", not "reviewed clean" — the skill must caveat this.
   noReviewGate: TASK_REVIEW === 'skip' && IMPL_REVIEW === 'skip',
+  planReviewRan,                                            // null = skipped/resume; false ⇒ a configured plan reviewer could not run — skill must caveat
+  implReviewRan: IMPL_REVIEW === 'skip' ? null : implRan,   // false ⇒ a configured impl reviewer DIED (gate not run) — skill must caveat
+  auditRan,                                                 // null = not attempted; false = audit died/aborted (NOT launch-confirmed)
+  blockedTaskCount: blockedTasks.length,                    // tasks that did not pass (incl. dep-blocked) — block convergence
+  workspaceValidatePassed,                                  // the final VALIDATE_ALL on the integrated tree (false ⇒ tree not green; blocks convergence)
+  endStateUngated,                                          // TRUE ⇒ impl review skipped → whole-codebase semantic end-state NOT gated — skill must caveat
   goLive: GO_LIVE,
   workflowId: WORKFLOW_ID,        // the live-status id the skill assigned (null if status tracking off)
   statusFile: TRACK_STATUS ? STATUS_FILE : null,   // the durable .ulpi/workflows/<id>.json the run wrote
