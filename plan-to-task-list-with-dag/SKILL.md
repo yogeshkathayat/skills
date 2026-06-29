@@ -1,6 +1,6 @@
 ---
 name: plan-to-task-list-with-dag
-version: 2.0.0
+version: 2.0.1
 description: |
   Create a safe implementation plan as both markdown and JSON DAG artifacts. Challenge scope with
   the user first, explore real code before decomposing, then emit atomic TASK-NNN entries with
@@ -162,6 +162,10 @@ Task rules:
 - for rewrite or composition tasks, add at least one criterion proving existing semantics were not silently dropped
 - if a new file needs export or registration, assign that ownership to a specific task
 - if a task only creates structure and semantic hardening is still needed, split that follow-up explicitly
+- `validateCommand` MUST be SLICE-SCOPED — greenable by THIS task's `writeScope` plus its already-integrated dependencies, and runnable independently of unrelated work:
+  - Scope it to the task's own files, never a whole package. For vitest, use `pnpm --filter <pkg> exec vitest run <path/to/file.test.ts>`. Do NOT use `pnpm --filter <pkg> test -- <file>` — the `--` makes vitest ignore the positional and run the ENTIRE package, so unrelated or pre-existing failures leak into this task's gate and can falsely block a correct slice.
+  - Every test file the command runs must be in this task's `writeScope` or guaranteed green by an integrated dependency. Never point a task's validate at a test file another task owns and this task cannot fix.
+  - Avoid whole-suite/e2e commands that only pass at end-state; if two pieces cannot each validate independently, they belong in ONE task.
 
 **Success criteria**: Each task is executable without hidden context and small enough for independent review.
 
