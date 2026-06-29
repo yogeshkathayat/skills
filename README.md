@@ -41,6 +41,8 @@ npx skills add https://github.com/ulpi-io/skills --skill browse
 | [frontend-design-ui-ux](#frontend-design-ui-ux) | Locked design language + UX/UI spec in `.ulpi/design` — anti-slop, browse inspiration, design-system routing, a11y; delegates the build (no code) |
 | [launch-product-hunt](#launch-product-hunt) | Prepare & run a Product Hunt launch — grounded, compliant, paste-ready package (listing, plan, hour-by-hour runbook, outreach, pre-flight gate) in `.ulpi/launch`; composes the shared launch-* skills |
 | [launch-hacker-news](#launch-hacker-news) | Prepare & run a Show HN launch — title, honest technical first comment, timing, thread runbook, readiness gate in `.ulpi/launch`; forbids all vote mobilization; composes the launch-* skills |
+| [launch-x](#launch-x) | Prepare & run an X (Twitter) launch — scroll-stopping thread, link-in-reply, golden-hour engagement runbook, pre-flight gate in `.ulpi/launch`; composes the launch-* skills |
+| [launch-linkedin](#launch-linkedin) | Prepare & run a LinkedIn launch — problem-first post, link-in-first-comment, golden-hour + team-amplification runbook, pre-flight gate in `.ulpi/launch`; composes the launch-* skills |
 | [launch-copy](#launch-copy) | Product-grounded launch copywriting — taglines/descriptions/first-comment in A/B/C/D angles from an asset profile; shared by the launch-* family |
 | [launch-outreach](#launch-outreach) | Compliant supporter outreach — recruit, segment, notify in waves; per-platform compliance dial (PH waves OK, HN no mobilization) |
 | [launch-analytics](#launch-analytics) | Launch attribution — one UTM scheme + GA4 signup/activation tracking for the traffic spike |
@@ -406,6 +408,30 @@ npx skills add https://github.com/ulpi-io/skills --skill launch-hacker-news
 **A Show HN that won't get flagged — honest, technical, and ready for skeptical engineers.**
 
 Writes a small, HN-appropriate package to `.ulpi/launch/hacker-news/`: `POST.md` (the `Show HN: <name> – <description>` title in HN's exact no-editorializing form + the URL + the founder's explanatory **first comment** — what it is, why you built it, the real stack, the honest limitations, one specific feedback ask), `PLAN.md` (when to post in US-Eastern time, the first-1–2-hours `/newest` plan, a **thread-engagement plan** with prepared non-defensive answers to the hardest likely questions, and the second-chance/repost plan), and `CHECKLIST.md` (a blocking readiness gate: title format, qualifies as a Show HN, **no signup wall**, survives the "hug of death", zero solicitation). Every rule is **verified verbatim against official HN sources** (showhn.html, the guidelines, the FAQ, dang's second-chance-pool comments); the reverse-engineered ranking formula is labeled non-official. HN is **stricter than Product Hunt**: it **forbids all vote mobilization** (no waves, no asking anyone to upvote — vote rings get detected and banned), punishes hype/marketing-speak, and rewards a present, non-defensive founder. The HN platform skill of the **launch-\*** family — owns HN mechanics/rules/policy/runbook/gate and composes `launch-copy` (the Show HN title + first comment) and `launch-analytics`, with built-in fallbacks.
+
+---
+
+## launch-x
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill launch-x
+```
+
+**A launch thread that actually gets distribution — built for how X ranks in 2026.**
+
+Writes a paste-ready package to `.ulpi/launch/x/`: `POST.md` (a scroll-stopping **hook tweet**, the thread arc — hook → problem → what it is → demo → wedge → CTA — native demo media, and the product link in a **first reply**, not the main tweet, so reach isn't penalized), `PLAN.md` (when to post, the **golden-hour** runbook, quote-post milestones, post-launch), and `CHECKLIST.md` (a blocking gate). Grounded in current sources — X's **open-sourced ranking weights** (a reply the author replies back to = the top signal at `75.0`; replies ≫ likes), the **Phoenix** transformer that replaced the heavy-ranker in Jan 2026 (so 2026 weights are labeled non-official), the external-link reach penalty (→ link-in-reply), and X Premium's reach multiplier (Buffer's 18.8M-post study, labeled third-party). Unlike Product Hunt / Hacker News, on X you **may** ask your own audience and team to genuinely engage — it just blocks what X penalizes: engagement-bait, bought/coordinated engagement, and a link in the main tweet. The X platform skill of the **launch-\*** family; composes `launch-copy`, `launch-outreach` (mode `x`), and `launch-analytics`, with built-in fallbacks.
+
+---
+
+## launch-linkedin
+
+```bash
+npx skills add https://github.com/ulpi-io/skills --skill launch-linkedin
+```
+
+**A LinkedIn launch post built for dwell time, not "I'm excited to announce."**
+
+Writes a paste-ready package to `.ulpi/launch/linkedin/`: `POST.md` (a **problem-first hook** that survives the ~140-char mobile "see more" cut with the product named later, a skimmable dwell-worthy body, the format that earns reach — document/carousel, image, or native video — ~3 niche hashtags, and the link in the **first comment**), `PLAN.md` (when to post — Tue–Thu with the 2026 afternoon shift — the **golden-hour** runbook, sanctioned **team amplification** via "Notify Employees", post-launch), and `CHECKLIST.md` (a blocking gate). Grounded in current sources — LinkedIn's **LLM/dwell-time** feed ranking (dwell is an *officially confirmed* signal; comments ≫ reactions), the contested-and-shrinking external-link penalty (it's the preview **card**, not the URL — link-in-first-comment is the low-risk default, don't over-engineer it), and the official lines that **engagement bait is spam** and **engagement pods are prohibited** — while genuine team/network engagement and "Notify Employees" are fine. The LinkedIn platform skill of the **launch-\*** family; composes `launch-copy`, `launch-outreach` (mode `linkedin`), and `launch-analytics`, with built-in fallbacks.
 
 ---
 

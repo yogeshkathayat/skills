@@ -26,6 +26,31 @@ between *announcing a launch / inviting engagement* (allowed) and *soliciting or
   asking anyone to upvote is not.
 - **Voice:** technical, humble, no hype, no emoji.
 
+## Mode: `x`
+
+- **Mobilization:** **allowed (engagement is fine).** Unlike PH/HN, X has **no vote-ring rule** — you may
+  ask your own audience, team, and email list to genuinely check out the launch thread and repost. Notify
+  them around the post; the **golden hour** (first 30–60 min) is what matters.
+- **The bright line:** **coordinated / reciprocal / compensated** boosting is prohibited — no reply-pods,
+  like-for-like, bought engagement, or **mass-DM'd identical scripts** (that's X's "platform manipulation"
+  rule). And no **engagement-bait** ("like & RT to win", "reply YES and I'll DM the link", follow-for-
+  follow).
+- **Ask in genuine, individual words** ("we're live, a repost helps if it's useful, I'm in the replies all
+  day"). DM only people who **opted in**.
+- **Voice:** authentic, punchy, builder-not-brand.
+
+## Mode: `linkedin`
+
+- **Mobilization:** **allowed (engagement is fine).** Ask your network and team to genuinely engage; the
+  **golden hour** (first 60–90 min) decides reach. **Employee amplification is sanctioned** — the Page
+  "Notify Employees" tool (once/day) + asking relevant colleagues to react **in their own words**.
+- **The bright line:** **engagement pods** / any **pre-arranged reciprocal** like-comment-share swap is a
+  ToS violation (detected); and **engagement-bait** ("Comment YES if…", "Tag 3 people", reaction-polls) is
+  classified as **spam**. A **genuine open question** is fine.
+- **Ask only if genuinely relevant** to the person, in **their own words** — never scripted, never
+  reciprocal-by-agreement, never copy-paste reshares.
+- **Voice:** professional but human, story-led.
+
 ## Mode: `directory` / `generic`
 
 - **Mobilization:** usually N/A (directories don't rank on supporter votes). Outreach is announcement +
@@ -38,13 +63,20 @@ between *announcing a launch / inviting engagement* (allowed) and *soliciting or
 
 Scan each message (case-insensitive). **Any hit → rewrite.**
 
-`upvote`, `up-vote`, `up vote`, `vote for us`, `vote for me`, `give us a vote`, `support us` (in the
-vote sense), `help us hit #1`, `help us win`, `an upvote would mean`, `smash that`, `hunt us up`, `click
-to upvote`, any "do X and I'll give you Y" tied to a vote, and any plan to send **identical** copy to many
-strangers.
+**Vote-solicitation (product-hunt / hacker-news modes):** `upvote`, `up-vote`, `up vote`, `vote for us`,
+`vote for me`, `give us a vote`, `support us` (in the vote sense), `help us hit #1`, `help us win`, `an
+upvote would mean`, `smash that`, `hunt us up`, `click to upvote`, any "do X and I'll give you Y" tied to a
+vote, and any plan to send **identical** copy to many strangers.
 
-Safe replacements: "I'd love your honest feedback" · "take a look and tell me what you think" · "try it
-and comment with your reaction" · "we're live, here's the link" · "I'll be in the comments all day".
+**Engagement-bait (x / linkedin modes):** `like & rt to win`, `rt to win`, `retweet to win`, `reply YES`,
+`reply DONE`, `follow for follow`, `follow back`, `f4f`, `comment YES`, `comment "`, `tag 3`, `tag a
+friend`, `like for part`, `double-tap`, `drop a 🔥`, `#like`, `#follow`, `#commentbelow`, any
+prize/incentive tied to a like/RT/follow, and any **pre-arranged reciprocal** engagement / pod /
+comment-automation plan. *(A genuine "a repost/comment helps
+if it's useful" ask with no incentive is NOT a violation.)*
+
+Safe replacements: "I'd love your honest feedback" · "take a look and tell me what you think" · "a repost
+helps if it's genuinely useful" · "we're live, here's the link" · "I'll be in the replies all day".
 
 ## Community self-promo rules (check before posting anywhere)
 

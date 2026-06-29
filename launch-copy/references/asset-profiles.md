@@ -39,6 +39,30 @@ assets:
   - id: first-comment  versions: 1   notes: what it is, why you built it, the honest tradeoffs/limits, the stack, an explicit ask for feedback. Be ready to answer hard questions.
 ```
 
+## X / Twitter (baseline — the `launch-x` skill passes exact specs)
+
+```
+channel: x
+voice: authentic, punchy, specific; builder not brand; no hype/no corporate-speak.
+compliance: NO external link in the main tweet (link goes in the first reply); ≤2 hashtags; no engagement-bait.
+assets:
+  - id: hook-tweet   limit: 280 chars   versions: 3–4   notes: lead with the benefit / a specific or contrarian claim; attach demo media; no link, no hashtags.
+  - id: thread       notes: hook → problem → what it is → demo → how it's different → [proof] → CTA. Link goes in the first reply.
+  - id: link-reply   notes: the product link (UTM-tagged) as a self-reply to tweet 1, with one line of context.
+```
+
+## LinkedIn (baseline — the `launch-linkedin` skill passes exact specs)
+
+```
+channel: linkedin
+voice: professional but human, story-led, specific; no hype/no "thrilled to announce".
+compliance: no link-preview card in the body (link in the first comment); ~3 niche hashtags; no engagement-bait ("comment YES").
+assets:
+  - id: hook       limit: ~140 chars (mobile see-more)   versions: 3–4   notes: problem-first; name the product later. Survives the mobile fold.
+  - id: post-body  limit: 3000 chars (aim ~1,300–2,000)  notes: hook → story/problem → what we built → proof → one soft CTA (a genuine question, not "comment YES"). Whitespace, one idea per line.
+  - id: first-comment  notes: the product link (UTM-tagged) as the first comment + one line of context.
+```
+
 ## Directory listings (baseline)
 
 ```
