@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.8.0
+version: 1.9.0
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -460,6 +460,14 @@ Read the Workflow result:
 - **`blockedTaskCount > 0`** → that many tasks did not pass (engineer-failed, review-blocked, or
   `dep_blocked` because an upstream dependency never integrated — a `blocked on dependency <X>` reason
   points at the ROOT). These are in `openRegister`; surface them with their reasons.
+- **Pre-existing-failure attribution.** A `build[]` entry may carry a `preexistingNote` — its slice is
+  correct and was integrated, but its validate was red ONLY from pre-existing / out-of-scope failures it
+  doesn't own (the build no longer discards such correct work; the engineer self-classifies new-vs-pre-existing
+  against the base). And when `workspaceValidatePassed === false`, the `workspace-validate` marker now
+  distinguishes failures INTRODUCED by this run (the real blockers) from ones PRE-EXISTING on the base (need a
+  separate owning task — not caused by this run), with a per-step `[steps: typecheck=pass, lint=FAIL, …]`
+  breakdown. Surface this split so the user fixes the right thing and a green-slice build whose tree is red
+  from inherited breakage is read correctly (work preserved + real cause named), not as "the build broke it."
 - **If `planSupplied: true`**, the run RESUMED from a pre-reviewed plan: planning and plan-review were
   skipped by design — say so, so a clean verdict isn't misread as "the plan went unreviewed."
 - **`converged: true`** (real run, `openRegister` empty) → DONE. Report the build outcome per task,

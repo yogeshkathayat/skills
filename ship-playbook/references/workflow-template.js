@@ -282,7 +282,19 @@ const FIX_RESULT = { type: 'object', additionalProperties: false, required: ['ap
 const TASK_RESULT = {
   type: 'object', additionalProperties: false,
   required: ['taskId', 'status', 'validatePassed'],
-  properties: { taskId: { type: 'string' }, status: { type: 'string', enum: ['passed', 'blocked'] }, validatePassed: { type: 'boolean' }, filesTouched: { type: 'array', items: { type: 'string' } }, notes: { type: 'string' } },
+  properties: {
+    taskId: { type: 'string' }, status: { type: 'string', enum: ['passed', 'blocked'] }, validatePassed: { type: 'boolean' },
+    filesTouched: { type: 'array', items: { type: 'string' } }, notes: { type: 'string' },
+    // D3 — non-destructive failure handling. When validate is RED, the engineer re-runs it against the
+    // untouched base (in its worktree) and partitions the failures so the build can tell "I broke this"
+    // from "already broken / not mine". `committed` MUST be true whenever the engineer wrote+committed its
+    // slice (even on a red whole-suite validate) so the commit survives on its task branch and is never lost.
+    blockedReason: { type: 'string', enum: ['none', 'in_scope', 'preexisting_out_of_scope', 'engineer_incomplete'] },
+    newFailuresVsBaseline: { type: 'array', items: { type: 'string' } },   // failures THIS task introduced (not on the base) — the ones that truly block it
+    preexistingFailures: { type: 'array', items: { type: 'string' } },     // failures already red on the base / outside writeScope — NOT this task's to fix
+    committed: { type: 'boolean' },                                        // true ⇒ the slice is committed on the task branch (recoverable even if blocked)
+    commitSha: { type: 'string' },                                         // the slice's commit SHA on the task branch — recovery anchor for a blocked-but-committed slice
+  },
 }
 const INTEGRATE_RESULT = {
   type: 'object', additionalProperties: false,
@@ -421,11 +433,21 @@ ${t.stackSkill ? `If the ${t.stackSkill} skill is available here, you MUST use i
 Work in THIS isolated worktree. Base your task branch on the latest integrated state:
   git checkout -B ${branchFor(t)} ${WORKING_BRANCH}
 ${(t.dependsOn && t.dependsOn.length) ? `Your dependencies (${t.dependsOn.join(', ')}) are ALREADY merged into ${WORKING_BRANCH} — the build verified this before launching you, so their tables/rows/routes/exports exist in your branch. BUILD ON them; do NOT re-create or stub them, and import/consume them as the real thing.` : ''}
+WORKTREE SETUP (this is a fresh checkout — it may lack deps/env): if your validate needs them and node_modules is absent, run \`pnpm install --frozen-lockfile\` (or the repo's documented install); if your tests need env, the repo .env (when present) is at ${ROOT}/.env — symlink or copy it into the worktree (NEVER print, log, or inline secret VALUES; reference by location only). DB/Temporal/object-store services are expected to be running on the host — if a service the validate needs is unreachable, say so in notes and treat its failures as environment (preexisting), not your slice.
 Edit ONLY: ${(t.writeScope || []).join(', ')}. Honor the locked rules: ${HARD_RULES}.
 Meet ALL acceptance criteria: ${(t.acceptance || []).join(' | ')}.
-Make this pass: ${t.validate}. Then commit:
+COMMIT YOUR WORK NO MATTER WHAT — as soon as your slice is implemented, commit it so it is never lost:
   git add -A && git commit -m "${t.id}: ${t.title}"
-Report taskId, status ('passed' only if ${t.validate} is green), validatePassed, filesTouched.
+Set committed:true and report commitSha. (The build can integrate a correct slice even if the WHOLE validate is red for reasons outside your scope — but only if you committed.)
+Now run your validate and CLASSIFY the result (this is how the build avoids discarding correct work):
+  Run: ${t.validate}
+  • GREEN → status:'passed', validatePassed:true, blockedReason:'none'.
+  • RED → for EACH failure, decide whether YOUR change caused it: re-run the failing test(s) against the UNTOUCHED base (e.g. \`git stash\` your changes — or compare against ${WORKING_BRANCH} — re-run the same command, then restore your changes with \`git stash pop\`). Partition the failures:
+      - newFailuresVsBaseline = failures present WITH your change but NOT on the base, OR inside your writeScope → these are YOURS.
+      - preexistingFailures = failures already red on the untouched base, or originating in files OUTSIDE your writeScope (another task/area owns them) → NOT yours.
+    Then: if newFailuresVsBaseline is non-empty → status:'blocked', validatePassed:false, blockedReason:'in_scope' (these are real defects you introduced — FIX them and re-run; do not stop while any remain). If your slice is correct and ALL red is preexisting/out-of-scope (newFailuresVsBaseline empty) → status:'blocked', validatePassed:false, blockedReason:'preexisting_out_of_scope', list the preexistingFailures (test names + the files/area that own them). If you ran out of steps before finishing the slice → blockedReason:'engineer_incomplete'.
+  NEVER relax a rule, stub a dependency, or delete/weaken an unrelated test to force green. Honesty beats a fake pass — a correctly-classified preexisting_out_of_scope is integrated and surfaced, a faked green corrupts the tree.
+Report taskId, status, validatePassed, blockedReason, newFailuresVsBaseline, preexistingFailures, committed, commitSha, filesTouched.
 Implement ONLY this task.`
 }
 // merge ONE task branch onto the working branch — used by the per-task pipeline (under the merge lock).
@@ -624,7 +646,7 @@ const CLEANUP_SCHEMA = { type: 'object', additionalProperties: false, required: 
 async function cleanupWorktrees(when) {
   return rAgent(`Worktree hygiene in ${ROOT} — remove this workflow's transient build worktrees so they can't pollute later validates. READ git state, then:
 1. \`git -C ${ROOT} worktree list --porcelain\` — identify worktrees whose path is under \`.claude/worktrees/\` OR whose branch matches \`wf/build/*\` (these are ship-playbook build worktrees, including prior runs' leftovers). Do NOT touch the main working tree (${ROOT}) or any unrelated worktree.
-2. For each: \`git -C ${ROOT} worktree remove --force <path>\`; then if its branch is \`wf/build/*\` and fully merged or stale, \`git -C ${ROOT} branch -D <branch>\`.
+2. For each: \`git -C ${ROOT} worktree remove --force <path>\` to remove the transient checkout. Then delete its branch with \`git -C ${ROOT} branch -d <branch>\` — lowercase \`-d\`, the SAFE "delete only if already merged" form. CRITICAL: do NOT \`-D\` (force-delete) an unmerged \`wf/build/*\` branch — an un-integrated engineer commit is RECOVERABLE work (a slice that failed its gate can be cherry-picked later), so a leftover unmerged branch is intentional recovery state, never garbage. \`-d\` keeps merged branches pruned while preserving unmerged ones.
 3. \`git -C ${ROOT} worktree prune\` to clear stale admin entries.
 4. Clear any LEFTOVER in-progress merge on the main checkout (a build/merge agent may have died mid-merge, leaving MERGE_HEAD that would break the next merge / the final-validate checkout): \`git -C ${ROOT} merge --abort 2>/dev/null || true\`. Do NOT discard committed work — this only aborts an UNcommitted in-progress merge.
 Never delete non-worktree files and never remove the main checkout. Report removed (count), remaining (worktrees still present), and a short detail.`, { label: `cleanup-worktrees:${when}`, phase: 'Plan', schema: CLEANUP_SCHEMA })
@@ -696,12 +718,28 @@ async function buildPlan(plan, prior) {
   // the moment THIS task integrates (not batched per layer). alreadyOnBranch tasks (checkpoint re-review)
   // skip build+integrate and go straight to re-review. Records EXACTLY ONE terminal entry in out/layerPatch.
   async function runTask(t, alreadyOnBranch, layerPatch) {
+    // D3: set when the engineer's slice is correct + committed but its validate is red ONLY from
+    // pre-existing/out-of-scope failures — carried to the terminal record as a non-blocking note.
+    let preexistingNote = null
     try {
       if (!alreadyOnBranch) {
         const r = await buildSpawn(t, engineerBrief(t), `build:${t.id}`).catch(() => null)   // throw/null → dev_failed
-        if (!r || r.status !== 'passed') {
-          out.push({ task: t.id, status: 'blocked', reason: r ? 'engineer validate failed' : 'engineer agent errored (no result)', fixes: 0, findings: [] })
+        // D3 — DO NOT discard correct, committed work. A slice whose ONLY red is pre-existing / out-of-scope
+        // (the engineer introduced NO new failures and COMMITTED its work) is INTEGRATED, not thrown away; the
+        // pre-existing failures are surfaced as a note and the FINAL workspace-validate still gates the tree.
+        const newFails = (r && Array.isArray(r.newFailuresVsBaseline)) ? r.newFailuresVsBaseline : null
+        const preexistingOnly = !!r && r.status !== 'passed' && r.blockedReason === 'preexisting_out_of_scope'
+          && newFails !== null && newFails.length === 0 && r.committed === true
+        if (!r || (r.status !== 'passed' && !preexistingOnly)) {
+          const why = !r ? 'engineer agent errored (no result)'
+            : (r.blockedReason === 'engineer_incomplete' ? 'engineer did not finish the slice'
+               : `engineer introduced in-scope failures it must fix: ${(newFails || []).slice(0, 6).join('; ') || '(in-scope validate failure)'}`)
+          out.push({ task: t.id, status: 'blocked', reason: why, fixes: 0, findings: [] })
           layerPatch[t.id] = { status: 'dev_failed' }; return
+        }
+        if (preexistingOnly) {
+          preexistingNote = `slice correct + committed, but its validate (${t.validate}) is red only from pre-existing / out-of-scope failures it does not own: ${(r.preexistingFailures || []).slice(0, 8).join('; ') || '(unspecified)'} — needs a separate owning task; the final workspace-validate still gates the tree`
+          log(`${t.id}: integrating despite a red whole-validate — failures are pre-existing/out-of-scope (engineer introduced none)`)
         }
         // integrate JUST this task's branch — serialized by the merge lock (concurrent merges would race);
         // the merge agent RESOLVES conflicts (combining both sides), not bails — see mergeBrief.
@@ -714,10 +752,10 @@ async function buildPlan(plan, prior) {
           layerPatch[t.id] = { status: 'dev_done' }; return
         }
         integrated.add(t.id)                 // code is now on the working branch → unblocks dependents (next layer)
-        layerPatch[t.id] = { status: 'integrated' }
+        layerPatch[t.id] = { status: 'integrated', ...(preexistingNote ? { preexistingOnly: true } : {}) }
       }
       // on the branch now → review THIS task (skip if no per-task reviewer)
-      if (TASK_REVIEW === 'skip') { out.push({ task: t.id, status: 'passed', fixes: 0, findings: [] }); layerPatch[t.id] = { status: 'passed' }; return }
+      if (TASK_REVIEW === 'skip') { out.push({ task: t.id, status: 'passed', fixes: 0, findings: [], ...(preexistingNote ? { preexistingNote } : {}) }); layerPatch[t.id] = { status: 'passed' }; return }
       let review = await reviewTask(t)
       let fixes = 0
       let blockers = inScopeBlockers(review, t)           // ONLY findings this task can act on
@@ -740,7 +778,7 @@ async function buildPlan(plan, prior) {
       // deferred end-state gaps does NOT over-block the slice.
       const verdictBlocks = BLOCKING_VERDICTS.has(review.verdict) && !blockers.length && !deferred
       const status = (blockers.length || review._errored || verdictBlocks) ? 'blocked' : 'passed'
-      out.push({ task: t.id, status, fixes, findings: (review.findings || []).filter(f => fileInScope(f.file, t.writeScope)), crossTaskDeferred: deferred, ...(verdictBlocks ? { reason: `reviewer returned a blocking verdict (${review.verdict}) with no itemized in-scope finding` } : {}) })
+      out.push({ task: t.id, status, fixes, findings: (review.findings || []).filter(f => fileInScope(f.file, t.writeScope)), crossTaskDeferred: deferred, ...(preexistingNote ? { preexistingNote } : {}), ...(verdictBlocks ? { reason: `reviewer returned a blocking verdict (${review.verdict}) with no itemized in-scope finding` } : {}) })
       layerPatch[t.id] = { status, fixes, ...(deferred ? { crossTaskDeferred: deferred } : {}) }
     } catch (e) {
       // any uncaught throw in the unit → record blocked, never lose the task or crash the build. Use the
@@ -820,14 +858,18 @@ async function dedupVerify(all, phaseTitle) {
 // ROOT). In a non-git folder — or a repo with no commit on WORKING_BRANCH — every build agent's git
 // command fails and the run collapses into blocked-task noise. Verify once up front and abort cleanly.
 phase('Plan')
-const PREFLIGHT_SCHEMA = { type: 'object', additionalProperties: false, required: ['isGitRepo'], properties: { isGitRepo: { type: 'boolean' }, currentBranch: { type: 'string' }, workingBranchExists: { type: 'boolean' }, detail: { type: 'string' } } }
-const pre = await rAgent(`Report git readiness for a build that will checkout/commit/merge in ${ROOT} — READ-ONLY, do NOT init/create/modify anything. Run \`git -C ${ROOT} rev-parse --is-inside-work-tree\`: isGitRepo=true only if it prints "true" with exit 0 (false on any error / "not a git repository"). If a repo: report currentBranch (\`git -C ${ROOT} rev-parse --abbrev-ref HEAD\`) and workingBranchExists = whether \`git -C ${ROOT} rev-parse --verify --quiet "${WORKING_BRANCH}^{commit}"\` succeeds (the branch exists AND has a commit to branch from).`, { label: 'preflight:git', phase: 'Plan', schema: PREFLIGHT_SCHEMA })
+const PREFLIGHT_SCHEMA = { type: 'object', additionalProperties: false, required: ['isGitRepo'], properties: { isGitRepo: { type: 'boolean' }, currentBranch: { type: 'string' }, workingBranchExists: { type: 'boolean' }, baseSha: { type: 'string' }, detail: { type: 'string' } } }
+const pre = await rAgent(`Report git readiness for a build that will checkout/commit/merge in ${ROOT} — READ-ONLY, do NOT init/create/modify anything. Run \`git -C ${ROOT} rev-parse --is-inside-work-tree\`: isGitRepo=true only if it prints "true" with exit 0 (false on any error / "not a git repository"). If a repo: report currentBranch (\`git -C ${ROOT} rev-parse --abbrev-ref HEAD\`) and workingBranchExists = whether \`git -C ${ROOT} rev-parse --verify --quiet "${WORKING_BRANCH}^{commit}"\` succeeds (the branch exists AND has a commit to branch from). Also report baseSha = the output of \`git -C ${ROOT} rev-parse ${WORKING_BRANCH}\` when the branch exists (the branch TIP at run start — the pre-run baseline the final gate uses to tell pre-existing failures from ones this run introduced); '' if it does not exist.`, { label: 'preflight:git', phase: 'Plan', schema: PREFLIGHT_SCHEMA })
 if (!pre || pre.isGitRepo !== true) {
   return { converged: false, ranReal: false, aborted: `ROOT is not a git repository: ${ROOT}. ship-playbook builds by creating task branches and git-merging them onto ${WORKING_BRANCH}, so it needs a git work tree. Run \`git init\` and commit a baseline (or point root at the actual repo), then relaunch.`, goLive: GO_LIVE }
 }
 if (pre.workingBranchExists === false) {
   return { converged: false, ranReal: false, aborted: `ROOT is a git repo but WORKING_BRANCH "${WORKING_BRANCH}" has no commit to branch from (current branch: ${pre.currentBranch || 'unknown'}). The build needs a committed base — make a baseline commit on "${WORKING_BRANCH}" (or set workingBranch to an existing committed branch), then relaunch.`, goLive: GO_LIVE }
 }
+// D2 — the pre-run baseline anchor: the WORKING_BRANCH tip BEFORE this run's tasks land. The final gate
+// compares a red tree against this commit to ATTRIBUTE failures (pre-existing vs run-introduced) instead of
+// blaming the run for breakage it inherited. '' when unknown (the gate then can't attribute, only report).
+const BASE_SHA = (pre && typeof pre.baseSha === 'string' && pre.baseSha.trim()) ? pre.baseSha.trim() : ''
 // Clear dangling build worktrees from prior runs BEFORE building, so the integrate validate starts clean.
 await cleanupWorktrees('preflight')
 
@@ -899,7 +941,7 @@ function validatePlan(p) {
 // real repo, normalizes it, and returns the PLAN object — it must NOT re-plan.
 const loadPlanBrief = (path) => `Load an EXISTING ship-playbook plan to RESUME from at the build phase — do NOT re-plan or invent tasks.
 Read the plan at ${path} in ${ROOT} (if it is a .md, also read its sibling .json — the JSON is the source of truth). Return it as structured output: planName, planPath, tasks[] (each: id, agent, reviewer, title, writeScope[], dependsOn[], acceptance[], validate, stackSkill|null) and layers[][] (the parallel execution layers as task-id arrays).
-Normalize, don't redesign: if a task has no reviewer, set it to its agent name + '-reviewer'; preserve each task's dependsOn as written (else []); if layers are absent, derive them as a topological order from dependsOn (else one layer with every task id). Return exactly the tasks the file defines. If the file is missing or has no tasks, return an empty tasks[].`
+Normalize, don't redesign. Map the common DAG-plan field ALIASES to the canonical names so nothing is silently dropped: assignedAgent → agent; validation (an array of commands) → validate (join the commands with ' && '); acceptanceCriteria → acceptance; if a task has no reviewer, set it to its agent name + '-reviewer'; fold findingRefs/implementation into description. Preserve each task's dependsOn as written (else derive it from a top-level dependencyMap if present, else []). For layers: use top-level layers[][] if present; else use parallelization.lanes ONLY if it is a valid topological order of dependsOn; else derive a topological order from dependsOn (else one layer with every task id). Also: if a task's validate uses the \`pnpm … test -- <file>\` form, REWRITE it to \`pnpm --filter <pkg> exec vitest run <path>\` (the \`--\` form makes vitest ignore the positional and run the WHOLE package, not just the file). Return exactly the tasks the file defines. If the file is missing or has no tasks, return an empty tasks[].`
 
 // ── the playbook: ONE pass — (write plan → plan review) OR resume → build → impl review → audit → return ──
 // NO automatic recursion. The verified findings are RETURNED as feedback; the skill presents them and
@@ -928,6 +970,15 @@ const _planError = validatePlan(plan)
 if (_planError) {
   await statusStep({ status: 'aborted', phases: { plan: { status: 'failed', detail: _planError } } }, 'plan-failed')
   return { converged: false, ranReal: false, aborted: _planError, goLive: GO_LIVE }
+}
+// D1 — non-fatal slice-scope warning. The `pnpm … test -- <file>` form does NOT filter to that file:
+// vitest treats the post-`--` token as a passthrough positional and runs the WHOLE package, so unrelated
+// pre-existing breakage leaks into the slice gate. Not an abort (D3's engineer self-classification + the
+// final gate's attribution catch the fallout, and the plan-gen skill is where it's truly prevented) — but
+// logged so a mis-scoped plan is visible. Prefer `pnpm --filter <pkg> exec vitest run <path>`.
+for (const t of (plan.tasks || [])) {
+  if (/(?:^|\s)(?:test|run)\s+--\s+\S/.test(String(t.validate || '')))
+    log(`plan WARNING ${t.id}: validate "${t.validate}" uses the \`test -- <file>\` form — vitest ignores the positional after \`--\` and runs the WHOLE package (pre-existing breakage leaks into this slice's gate). Prefer \`pnpm --filter <pkg> exec vitest run <path>\`.`)
 }
 // Read the CHECKPOINT (prior per-task status) BEFORE writing plan-done — otherwise the plan-done write
 // below would clobber every task back to 'pending' and the resume would rebuild everything. On a fresh
@@ -966,11 +1017,12 @@ await statusStep({ phases: { build: { status: 'done' } } }, 'build-done')
 // command is the one thing that deterministically catches a non-green tree. A non-pass (or a died gate)
 // blocks convergence. This is the "run the full suite on the final branch" gate.
 await cleanupWorktrees('pre-final-validate')   // clear stale build worktrees so the gate measures ONLY the project tree
-const FINAL_VALIDATE_SCHEMA = { type: 'object', additionalProperties: false, required: ['passed'], properties: { passed: { type: 'boolean' }, detail: { type: 'string' } } }
-const fv = await rAgent(`Workspace-validate the integrated tree and report the exit result. Do NOT EDIT source files — but changing git state to check out the branch IS allowed and required.
+const FINAL_VALIDATE_SCHEMA = { type: 'object', additionalProperties: false, required: ['passed'], properties: { passed: { type: 'boolean' }, detail: { type: 'string' }, segments: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'passed'], properties: { name: { type: 'string' }, passed: { type: 'boolean' } } } }, preexistingFailures: { type: 'array', items: { type: 'string' } }, introducedFailures: { type: 'array', items: { type: 'string' } } } }
+const fv = await rAgent(`Workspace-validate the integrated tree, with PER-STEP granularity and (on red) PRE-EXISTING-vs-INTRODUCED attribution. Do NOT EDIT source files — but changing git state to check out branches/commits IS allowed and required; restore ${WORKING_BRANCH} when done.
 1. \`git -C ${ROOT} checkout ${WORKING_BRANCH}\`, then confirm \`git -C ${ROOT} rev-parse --abbrev-ref HEAD\` == ${WORKING_BRANCH} — the tree under test MUST be ${WORKING_BRANCH}, never the repo's incidental HEAD.
-2. Run exactly: ${VALIDATE_ALL}. It must cover ONLY the project at ${ROOT} — never scan \`.claude/worktrees/**\` or sibling agent dirs (\`.factory\`,\`.gemini\`,\`.opencode\`,\`.trae\`,\`.kiro\`,\`.vibe\`). If the configured command would walk them (e.g. \`eslint .\` / \`tsc\` without excludes), restrict it to the project sources (add \`--ignore-pattern '.claude/**'\`, exclude in the tsconfig invocation, or scope to the changed paths) — leftover/transient worktrees must NEVER fail the gate, and never relax any other lint/type rule to make it pass.
-Report passed=true ONLY if ${VALIDATE_ALL} exits 0 on ${WORKING_BRANCH}; else passed=false with the first concrete errors in detail.`, { label: 'final-validate', phase: 'Build', schema: FINAL_VALIDATE_SCHEMA })
+2. The validate is a sequence of \`&&\`-joined steps: ${VALIDATE_ALL}. Run EACH step and record segments[] = [{name, passed}] for every step (e.g. typecheck/lint/test/build) — RUN ALL STEPS even after one fails (do NOT let an early \`&&\` failure hide later steps' status), so the report shows exactly which gates pass. Each step must cover ONLY the project at ${ROOT} — never scan \`.claude/worktrees/**\` or sibling agent dirs (\`.factory\`,\`.gemini\`,\`.opencode\`,\`.trae\`,\`.kiro\`,\`.vibe\`); if a command would walk them (e.g. \`eslint .\`/\`tsc\` without excludes) restrict it (\`--ignore-pattern '.claude/**'\`, scope the tsconfig, or scope to changed paths). NEVER relax a lint/type rule to make it pass. passed=true ONLY if EVERY step exits 0 on ${WORKING_BRANCH}; else passed=false with the first concrete errors in detail.
+3. ATTRIBUTION — only if passed=false. ${BASE_SHA ? `The pre-run baseline commit is ${BASE_SHA}. For the failing tests/checks, tell which are PRE-EXISTING vs INTRODUCED by this run: \`git -C ${ROOT} checkout ${BASE_SHA}\`, re-run the SAME failing test(s)/check(s) there, then \`git -C ${ROOT} checkout ${WORKING_BRANCH}\` to restore. preexistingFailures[] = failures that ALSO fail at ${BASE_SHA} (this run did NOT cause them — they need a separate owning task); introducedFailures[] = failures that PASS at ${BASE_SHA} but fail on ${WORKING_BRANCH} (this run regressed them — the real blockers). Do NOT edit during the comparison.` : `No pre-run baseline SHA is available — report failing items in detail without pre-existing/introduced attribution (leave those arrays empty).`}
+Report passed, segments[], detail, preexistingFailures[], introducedFailures[].`, { label: 'final-validate', phase: 'Build', schema: FINAL_VALIDATE_SCHEMA })
 const workspaceValidatePassed = !!(fv && fv.passed === true)   // null (agent died) OR false ⇒ NOT confirmed green
 await statusStep({ phases: { build: { status: 'done', workspaceValidate: workspaceValidatePassed ? 'passed' : 'failed' } } }, 'final-validate')
 
@@ -1009,7 +1061,12 @@ let openRegister = await dedupVerify(realFindings, 'Verify')
 const markers = blockedTasks.map(b => ({ severity: 'BLOCK', file: b.task, issue: b.reason || `task ${b.task} did not pass after ${b.fixes || 0} fixes`, source: 'native', phase: 'build', blockedTask: true }))
 if (!implRan) markers.push({ severity: 'BLOCK', file: 'impl-review', issue: `impl review (${IMPL_REVIEW}) did not produce a verdict — its agent died; the plan-vs-implementation gate was NOT run`, source: 'native', phase: 'impl', blockedTask: true })
 else if (implBlockingVerdict) markers.push({ severity: 'BLOCK', file: 'impl-review', issue: `impl review (${IMPL_REVIEW}) returned a BLOCKING verdict but no itemized finding — the end-state gate did not pass; treat as not-clean and inspect the impl review`, source: 'native', phase: 'impl', blockedTask: true })
-if (!workspaceValidatePassed) markers.push({ severity: 'BLOCK', file: 'workspace-validate', issue: `workspace validate (${VALIDATE_ALL}) did not pass green on ${WORKING_BRANCH}${fv && fv.detail ? ': ' + fv.detail : ' (gate agent died — not confirmed)'} — the integrated tree is not green`, source: 'native', phase: 'build', blockedTask: true })
+if (!workspaceValidatePassed) {
+  const seg = (fv && Array.isArray(fv.segments) && fv.segments.length) ? ` [steps: ${fv.segments.map(s => `${s.name}=${s.passed ? 'pass' : 'FAIL'}`).join(', ')}]` : ''
+  const intro = (fv && Array.isArray(fv.introducedFailures) && fv.introducedFailures.length) ? ` INTRODUCED by this run (real blockers): ${fv.introducedFailures.slice(0, 8).join('; ')}.` : ''
+  const pre = (fv && Array.isArray(fv.preexistingFailures) && fv.preexistingFailures.length) ? ` PRE-EXISTING on the base (not caused by this run — need a separate owning task): ${fv.preexistingFailures.slice(0, 8).join('; ')}.` : ''
+  markers.push({ severity: 'BLOCK', file: 'workspace-validate', issue: `workspace validate (${VALIDATE_ALL}) did not pass green on ${WORKING_BRANCH}${seg}${fv && fv.detail ? ': ' + fv.detail : ' (gate agent died — not confirmed)'} — the integrated tree is not green.${intro}${pre}`, source: 'native', phase: 'build', blockedTask: true })
+}
 openRegister = [...openRegister, ...markers]   // blocked tasks / a dead gate / a non-green tree ALWAYS keep the register non-empty → never a false converged
 // Whole-codebase SEMANTIC end-state (legacy paths removed, routes wired) is gated ONLY by impl review;
 // with impl review skipped it is unverified even if the tree compiles — surfaced as a caveat (config-
@@ -1062,7 +1119,7 @@ await statusStep({
     converged,
     openRegisterCount: openRegister.length,
     workspaceValidatePassed, endStateUngated,
-    build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes, ...(b.crossTaskDeferred ? { crossTaskDeferred: b.crossTaskDeferred } : {}) })),
+    build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes, ...(b.crossTaskDeferred ? { crossTaskDeferred: b.crossTaskDeferred } : {}), ...(b.preexistingNote ? { preexistingNote: b.preexistingNote } : {}) })),
     reviewConfig: { planHarness: PLAN_HARNESS, planReview: PLAN_REVIEW, buildHarness: BUILD_HARNESS, taskReview: TASK_REVIEW, implReview: IMPL_REVIEW },
     missingAgents: [...missingAgents],
   },
@@ -1093,7 +1150,7 @@ return {
   plan: plan.planName,
   planArchived,   // TRUE when a converged run moved the plan to .ulpi/plans/done/
   planSupplied: RESUME_PLAN,    // TRUE when this run RESUMED from a pre-built/pre-reviewed plan (plan + plan-review skipped)
-  build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes, ...(b.crossTaskDeferred ? { crossTaskDeferred: b.crossTaskDeferred } : {}) })),
+  build: buildLog.map(b => ({ task: b.task, status: b.status, fixes: b.fixes, ...(b.crossTaskDeferred ? { crossTaskDeferred: b.crossTaskDeferred } : {}), ...(b.preexistingNote ? { preexistingNote: b.preexistingNote } : {}) })),
   openRegister,                 // verified findings = the feedback to show the user
   missingAgents: [...missingAgents],   // specialist agent types the plan wanted that aren't installed here → skill notifies the user
   // the review/build roles this run used (so the skill can report them honestly and caveat the verdict)

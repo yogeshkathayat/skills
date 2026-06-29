@@ -96,9 +96,29 @@ and aborts only if it truly can't combine — it never bails blindly. The merge 
 (clears a leftover `MERGE_HEAD`; short-circuits if the task is already merged).
 
 A task's status from its unit: `integrated` (merged) · `dev_done` (engineer passed but merge didn't land —
-rebuilds on resume) · `dev_failed` (engineer validate failed) · `dep_blocked` (a dependency isn't
-integrated) · `passed`/`blocked` (after review + fix loop). Only on-branch statuses seed the dependency
-gate.
+rebuilds on resume) · `dev_failed` (engineer introduced NEW in-scope failures, or couldn't finish) ·
+`dep_blocked` (a dependency isn't integrated) · `passed`/`blocked` (after review + fix loop). Only on-branch
+statuses seed the dependency gate.
+
+## Non-destructive failure handling — the engineer self-classifies (do NOT discard correct work)
+
+The engineer ALWAYS commits its slice to its task branch — **even when the whole `validateCommand` is red** —
+so correct work is never lost. When the validate is red, the engineer re-runs it against the UNTOUCHED base
+(`git stash` + re-run) and partitions the failures into `newFailuresVsBaseline` (failures IT introduced,
+inside its writeScope) and `preexistingFailures` (already red on the base, or in files it doesn't own). Then:
+
+- **introduced new failures** → `dev_failed` (real defects it must fix; rebuilds on resume).
+- **slice correct, ALL red is pre-existing / out-of-scope** (no new failures, and it committed) → the build
+  **INTEGRATES the slice anyway** and records a non-blocking `preexistingNote` attributing the pre-existing
+  failures to a separate owning task. Discarding a correct slice because the *whole suite* is red from OTHER
+  code — and orphaning its commit — is the exact failure this prevents.
+- **couldn't finish the slice** → `dev_failed` (`engineer_incomplete`).
+
+The pre-existing red still blocks convergence — but via the **final validate gate**, which attributes the red
+as pre-existing-on-base vs introduced-by-this-run against the pre-run `baseSha` captured at preflight — NOT by
+throwing away a good slice. **Failed task branches are preserved**: worktree cleanup uses `git branch -d` (the
+merged-only form), never `-D` on an unmerged `wf/build/*` branch, so an un-integrated slice stays recoverable
+(cherry-pickable) instead of being force-deleted.
 
 ## The engineer ↔ reviewer pairing
 
@@ -138,11 +158,21 @@ Spawn the task's assigned specialist agent (the plan's `Agent` field) via the Ag
 - if the task's stack has a dedicated skill, the brief MUST instruct the agent to use it (`/nextjs`,
   `/laravel`, `/rust`, …) and honor its rules.
 - `isolation: "worktree"` (code-writing) and `run_in_background: true` for parallel lanes.
+- **Provision the worktree** — it's a fresh checkout that may lack `node_modules` and `.env`. The brief must
+  tell the engineer: if its validate needs deps and `node_modules` is absent, run `pnpm install
+  --frozen-lockfile`; if its tests need env, the repo `.env` (when present) is at `<root>/.env` — reference it
+  by LOCATION (symlink/copy), NEVER inline secret VALUES into the brief or logs. DB/Temporal/object-store
+  services are expected up on the host; an unreachable service's failures are environment (treated as
+  pre-existing), not the slice's defect. A bare worktree where `vitest`/the DB can't be reached produces false
+  "failed task" noise — provisioning is what makes the slice gate real.
 - A COMPLETE brief — a fresh agent inherits no context:
   - task id + title + description, and WHY it exists (the slice/AC it serves)
   - exact `writeScope` (the only files it may touch) and `filesToCreate`
   - the acceptance criteria (all of them)
   - the `validateCommand` it must make pass before declaring done
+  - the failure-classification contract: commit the slice no matter what, then run the validate; if red,
+    partition new-vs-pre-existing against the base and report `blockedReason` / `newFailuresVsBaseline` /
+    `preexistingFailures` / `committed` (see "Non-destructive failure handling" above)
   - the locked constraints it must honor (import boundaries, Node strip-only — no
     enum/parameter-property/namespace, `noUncheckedIndexedAccess`, money is BIGINT/string, RLS
     fail-closed, append-only ActivityLog, etc. — pull the relevant ones from root `CLAUDE.md`)
