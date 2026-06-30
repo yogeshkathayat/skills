@@ -623,17 +623,19 @@ function ingestGoLiveGateMarkers(result) {
 // never block; only BLOCK/CONCERN count toward looping.)
 async function planReviewLoop(plan, who) {
   let prev = Infinity
+  let fixed = false                                    // did any fix round edit the plan files on disk?
   for (let i = 0; i < MAX_REVIEW; i++) {
     const r = await routeReview(who, founderBrief(plan, who), `plan-review:${who}:${i}`, 'Plan review')
-    if (!r) return { ran: false }                      // reviewer agent died → the plan gate did NOT run
-    if (r.gateNotRun) return { ran: false }            // configured reviewer (e.g. kiro CLI) could not run → NOT a clean/approved plan
+    if (!r) return { ran: false, fixed }               // reviewer agent died → the plan gate did NOT run
+    if (r.gateNotRun) return { ran: false, fixed }     // configured reviewer (e.g. kiro CLI) could not run → NOT a clean/approved plan
     const n = blockingCount(r.findings)
-    if (r.verdict === 'approve' || n === 0) return { ran: true }     // clean — OBSERVATIONs never block
-    if (n >= prev) return { ran: true }                // not improving → stop churning, proceed to build
+    if (r.verdict === 'approve' || n === 0) return { ran: true, fixed }     // clean — OBSERVATIONs never block
+    if (n >= prev) return { ran: true, fixed }         // not improving → stop churning, proceed to build
     prev = n
     await rAgent(planFixBrief(plan, r.findings), { label: `plan-fix:${i}`, phase: 'Plan review', schema: FIX_RESULT })   // fix is always native
+    fixed = true                                       // plan files on disk now differ from the in-memory `plan` → caller must reload before build
   }
-  return { ran: true }
+  return { ran: true, fixed }
 }
 
 // ── worktree hygiene: prune dangling build worktrees ────────────────────────────
@@ -1001,6 +1003,19 @@ if (!RESUME_PLAN && PLAN_REVIEW !== 'skip') {
   await statusStep({ status: 'plan_review', phases: { plan_review: { status: 'in_progress' } } }, 'plan-review-start')
   const pr = await planReviewLoop(plan, PLAN_REVIEW)
   planReviewRan = !!(pr && pr.ran)
+  // The fix loop edits the plan FILES on disk; the in-memory `plan` is now stale. Reload it so the BUILD
+  // walks the FIXED DAG, not the pre-fix one (the build reads plan.tasks directly — it never re-reads the
+  // files). Gated on pr.fixed so a clean review (no edits) skips the extra read. If the reloaded plan
+  // fails validation, keep the pre-fix in-memory plan rather than build on a plan we can't parse.
+  if (pr && pr.fixed) {
+    const reloadPath = plan.planPath || PLAN_PATH
+    if (reloadPath) {
+      const reloaded = await rAgent(loadPlanBrief(reloadPath), { label: 'reload-fixed-plan', phase: 'Plan review', schema: PLAN, agentType: 'general-purpose' })
+      const reErr = reloaded ? validatePlan(reloaded) : 'reload returned no plan'
+      if (reErr) log(`reloaded plan after fixes failed validation (${reErr}) — keeping the pre-fix in-memory plan`)
+      else { plan = reloaded; await statusStep({ plan: { name: plan.planName, path: plan.planPath || null, taskCount: plan.tasks.length }, tasks: Object.fromEntries(plan.tasks.map(t => [t.id, { title: t.title || '', agent: t.agent || '', branch: branchFor(t), status: priorStatus[t.id] || 'pending' }])) }, 'plan-reloaded') }
+    }
+  }
   await statusStep({ phases: { plan_review: { status: planReviewRan ? 'done' : 'errored' } } }, 'plan-review-done')
 } else {
   await statusStep({ phases: { plan_review: { status: 'skipped' } } }, 'plan-review-skip')

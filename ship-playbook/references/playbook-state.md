@@ -32,6 +32,10 @@ A intake ──> B plan ──> C plan-review loop (native ∥ harness, bounded)
   single reviewer (the FIX is always native). When it runs it's a plan-QUALITY gate (scope,
   decomposition, phantom paths): ONE bounded loop, exits on no BLOCK/CONCERN (OBSERVATIONs never block)
   OR non-convergence, capped at `MAX_REVIEW` (2).
+- **Fix-then-reload** — C's fix rounds edit the plan FILES on disk (`.json` source of truth, then re-render
+  `.md`), so the in-memory plan goes stale while the build (E) reads `plan.tasks` directly. After any review
+  that applied a fix, the run RELOADS the plan from disk before E so the build walks the FIXED DAG, not the
+  pre-fix one. If the reloaded plan fails validation, the pre-fix in-memory plan is kept.
 - E barriers between DAG layers; each task loops engineer↔reviewer until it passes — unless `taskReview
   skip`, then there is no per-task reviewer/fix loop and a task passes on its engineer validate alone.
   The per-task review is **slice-scoped**: it judges only the task's own writeScope + diff against its
