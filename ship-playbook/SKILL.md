@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.10.1
+version: 1.10.2
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
@@ -356,12 +356,14 @@ Then launch `references/workflow-template.js` via the **Workflow** tool, passing
 Workflow({ scriptPath: ".../references/workflow-template.js",
            args: { prompt, root, workingBranch, validate, hardRules, goLive,
                    planHarness, planReview, buildHarness, taskReview, implReview,
-                   auditScriptPath, availableAgents, allowGeneralFallback,
+                   auditScriptPath, availableAgents, allowGeneralFallback, warmWorktree,
                    planPath, kiroModel,
                    workflowId, statusFile, trackStatus, checkpointResume } })   // planPath → RESUME at build;
                                                               // workflowId/statusFile → live .ulpi/workflows/<id>.json
                                                               // (trackStatus:false disables); checkpointResume:false →
-                                                              // force a full rebuild (default true: skip done tasks)
+                                                              // force a full rebuild (default true: skip done tasks);
+                                                              // warmWorktree:false → plain per-worktree install
+                                                              // (default true: CoW-seed node_modules/vendor/Pods + sccache)
 ```
 
 **After launch, stamp the run id AND the full launch args.** The Workflow tool returns a `runId` (`wf_…`)
@@ -404,6 +406,10 @@ The Workflow then executes the playbook in one pass, running each gate at the le
 - **Build (steps 10–11)** — walk the DAG layers; per task: engineer (worktree, task branch) →
   in-workflow integrate agent (`git merge` onto the working branch, removing each merged worktree as it
   goes) → reviewer (unless `taskReview skip`) → bounded fix loop until it passes; barrier between layers.
+  Each fresh worktree is **provisioned fast** (`warmWorktree`, default on): a one-time warm step (overlapping
+  planning) primes caches, then engineers CoW-clone `node_modules`/`vendor`/`Pods` from the primary checkout
+  when the lockfile is unchanged (Rust shares crate compilation via `sccache` instead of cloning `target/`),
+  falling back to a normal frozen install; `warmWorktree:false` restores a plain per-worktree install.
   Engineer routes per `buildHarness`; reviewer per `taskReview` — and the two are INDEPENDENT (write
   codex, review kiro is fine). The build and verify fan-outs run behind concurrency gates so a wide DAG
   layer or a long findings list can't trip Claude's API rate limits: at most `MAX_BUILD_PARALLEL` (4)
