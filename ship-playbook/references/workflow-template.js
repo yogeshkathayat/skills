@@ -126,10 +126,28 @@ if [ -f composer.json ]; then       # Laravel / PHP
   if cmp -s composer.lock "$ROOT/composer.lock" 2>/dev/null && cow_clone "$ROOT/vendor" ./vendor
   then say "vendor cloned (lockfile unchanged)"; else composer install --prefer-dist --no-interaction; fi
 fi
-# Rust: NO target/ clone on purpose — sccache (primed + capped at 80G via its config file by the warm
-# step) already shares crate/dep compilation from a single bounded cache; cloning a multi-GB target/
-# per worktree is redundant, blows up disk, and can tear if ROOT is mid-build. Go: GOCACHE/GOMODCACHE
-# already global. Nothing to seed for either.
+if [ -f Cargo.toml ]; then          # Rust / Cargo — NO target/ clone (redundant with sccache, multi-GB
+  # per worktree, tears if ROOT is mid-build). Instead WIRE sccache into cargo config so it reaches EVERY
+  # cargo here (dev-fast.sh, raw cargo, build.rs) with NO env dependency — an exported RUSTC_WRAPPER does
+  # NOT survive the agent's separate shells / a fresh validate shell, so it silently misses the real cargo
+  # (only the inline-prefixed warm prime ever got wrapped). Worktree-local + git-excluded: never committed.
+  if command -v sccache >/dev/null 2>&1; then
+    mkdir -p .cargo
+    if [ ! -f .cargo/config.toml ] && [ ! -f .cargo/config ]; then
+      printf '[build]\\nrustc-wrapper = "sccache"\\nincremental = false\\n' > .cargo/config.toml
+      ex=$(git rev-parse --git-path info/exclude 2>/dev/null)
+      [ -n "$ex" ] && ! grep -qx '.cargo/config.toml' "$ex" 2>/dev/null && printf '.cargo/config.toml\\n' >> "$ex"
+      say "cargo wired to sccache (worktree .cargo/config.toml, git-excluded)"
+    elif grep -qs rustc-wrapper .cargo/config.toml .cargo/config; then
+      say "cargo config already sets rustc-wrapper — left as-is"
+    else
+      say "repo tracks a .cargo/config without rustc-wrapper — not editing a tracked file; add rustc-wrapper=sccache under [build] to share the cache"
+    fi
+  else
+    say "sccache not installed — Rust builds run uncached"
+  fi
+fi
+# Go: GOCACHE/GOMODCACHE already global — nothing to seed.
 exit 0`
 
 // Short instruction injected into the two build briefs — invoke the tested script, with a plain-install
@@ -137,7 +155,7 @@ exit 0`
 const WORKTREE_SEED = WARM_WORKTREE
   ? `FAST WORKTREE SETUP — this fresh checkout has empty deps/artifacts. Provision fast FIRST:
   bash ${ROOT}/.ulpi/seed-worktree.sh ${ROOT}
-It CoW-clones node_modules / vendor / Pods from ${ROOT} (instant on the same volume; auto-falls back to a frozen install cross-volume). If that script is ABSENT or errors, do a normal frozen install yourself (pnpm i --frozen-lockfile / npm ci / yarn --immutable / composer install --prefer-dist). For a Rust/Cargo task there is NOTHING to clone — instead \`export RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 SCCACHE_CACHE_SIZE=80G\` in your build shell BEFORE the validate/build (raw cargo AND any wrapper script that calls cargo inherit it) so crate compilation is shared via sccache — the 80G cap is also persisted in sccache's config file by the warm prime, so it holds even against an already-running or auto-restarted daemon (a bare export alone would be ignored by a live server). ${ENV_AND_SERVICES}`
+It CoW-clones node_modules / vendor / Pods from ${ROOT} (instant on the same volume; auto-falls back to a frozen install cross-volume). If that script is ABSENT or errors, do a normal frozen install yourself (pnpm i --frozen-lockfile / npm ci / yarn --immutable / composer install --prefer-dist). For a Rust/Cargo task there is NOTHING to clone: the seed script has already wired sccache into this worktree's \`.cargo/config.toml\` (git-excluded), so EVERY cargo here — dev-fast.sh, raw cargo, build.rs — is sccache-wrapped automatically, no env needed. Do NOT rely on \`export RUSTC_WRAPPER=…\` in a separate shell: it does not survive into the real cargo process (that was the cache-bypass bug). If you ever need to force it, PREFIX your exact validate command inline (\`RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 <your validate command>\`), never a standalone export. After the build, sanity-check with \`sccache --show-stats\` — compile requests must climb (if they don't, cargo is bypassing sccache and the run is cold). The 80G cap is already applied by the warm prime. ${ENV_AND_SERVICES}`
   : `WORKTREE SETUP (this is a fresh checkout — it may lack deps/env): if your validate needs them and node_modules is absent, run \`pnpm install --frozen-lockfile\` (or the repo's documented install); ${ENV_AND_SERVICES}`
 
 // Warm brief: write the seed script + make ROOT seed-ready. Started EARLY (after preflight) so it
