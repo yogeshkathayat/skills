@@ -21,6 +21,7 @@
 //            taskReview,                               // 'skip' | 'native' | 'codex' | 'kiro'  (who REVIEWS each built task)
 //            implReview,                               // 'skip' | 'native' | 'codex' | 'kiro'  (impl review after all tasks)
 //            auditScriptPath, availableAgents, allowGeneralFallback,
+//            warmWorktree,                             // false → plain per-worktree install (default true: CoW-seed deps/artifacts + sccache, any stack)
 //            planPath | plan,                          // RESUME: an already-reviewed DAG plan (path or parsed object)
 //            workflowId, statusFile, trackStatus }     // LIVE STATUS: id + absolute .ulpi/workflows/<id>.json path
 //   (auditScriptPath is optional — see the comment at its CFG read below. planPath/plan are optional —
@@ -74,6 +75,85 @@ const MAX_FIX = 3                             // bounded per-task engineer↔rev
 // but the build fan-out and the read-only phases barely overlap, so peak stays low.
 const MAX_BUILD_PARALLEL = 4                  // concurrent build/fix engineers (worktree-isolated)
 const MAX_PARALLEL = 6                        // concurrent reviewers / verifiers / other read-only agents
+
+// ── fast worktree provisioning — reuse the host's already-built deps/artifacts (any stack) ──
+// Every build/fix engineer runs isolation:'worktree' = a FRESH checkout with EMPTY node_modules/
+// vendor/Pods/target, so each cold-installs or cold-compiles the WHOLE dependency set — the same work
+// per lane, per layer, and again on resume. Instead we SEED each worktree from the primary checkout at
+// ROOT via copy-on-write (instant, independent copy) using ONE tested script (below), and for Rust add
+// a shared sccache compiler cache. Zero extra agents/tokens — local disk/CPU only, no Claude round-trips.
+// Default on; CFG.warmWorktree=false restores today's plain per-worktree install exactly.
+const WARM_WORKTREE = CFG.warmWorktree !== false
+const ENV_AND_SERVICES = `If your tests need env, the repo .env (when present) is at ${ROOT}/.env — symlink or copy it into the worktree (NEVER print, log, or inline secret VALUES; reference by location only). DB/Temporal/object-store services are expected running on the host — if a service the validate needs is unreachable, say so in notes and treat its failures as environment (preexisting), not your slice.`
+
+// The seed script the warm step writes to ROOT/.ulpi/ and every engineer runs. The never-a-slow-copy
+// guarantee lives in cow_clone: it demands a real CoW clone (cp -Rc / --reflink=ALWAYS, which ERROR when
+// unsupported) and on failure falls back to a normal frozen install — so the result is always instant-
+// clone OR normal install, never a silent slow full copy. No ${…}/backticks so it embeds cleanly here.
+const SEED_SCRIPT = `#!/usr/bin/env bash
+# ship-playbook worktree seed — CoW-reuse the primary checkout's built deps/artifacts in THIS worktree.
+# Instant on same-volume APFS/btrfs/xfs; falls back to a frozen install otherwise (never a slow copy).
+# Run from the WORKTREE root. $1 = primary checkout (ROOT). Safe to re-run.
+ROOT="$1"; [ -n "$ROOT" ] || { echo "[seed] usage: seed-worktree.sh <ROOT>"; exit 2; }
+say() { echo "[seed] $*"; }
+cow_clone() {                       # $1=src $2=dst -> 0 ONLY on a real copy-on-write clone, else 1
+  [ -d "$1" ] && [ ! -e "$2" ] || return 1
+  if [ "$(uname)" = Darwin ]; then
+    # macOS cp -c SILENTLY full-copies when clonefile is unsupported (man cp: falls back to copyfile),
+    # so gate on same device id (same APFS volume); cross-volume returns 1 and the caller installs.
+    [ "$(stat -f %d "$1" 2>/dev/null)" = "$(stat -f %d "$(dirname "$2")" 2>/dev/null)" ] || return 1
+    cp -Rc "$1" "$2" 2>/dev/null
+  else
+    cp -a --reflink=always "$1" "$2" 2>/dev/null   # GNU cp genuinely ERRORS if reflink is unsupported
+  fi
+}
+if [ -f package.json ]; then        # Node / Next.js / React Native
+  lock=$(ls pnpm-lock.yaml package-lock.json yarn.lock 2>/dev/null | head -1)
+  if [ -n "$lock" ] && cmp -s "$lock" "$ROOT/$lock" 2>/dev/null && cow_clone "$ROOT/node_modules" ./node_modules
+  then say "node_modules cloned (lockfile unchanged)"
+  else say "node_modules install (lock changed or clone unavailable)"
+    if   [ -f pnpm-lock.yaml ];    then pnpm install --frozen-lockfile --prefer-offline
+    elif [ -f package-lock.json ]; then npm ci --prefer-offline
+    elif [ -f yarn.lock ];         then yarn install --immutable
+    else npm install; fi
+  fi
+  if [ -f ios/Podfile ]; then       # React Native native pods
+    if cmp -s ios/Podfile.lock "$ROOT/ios/Podfile.lock" 2>/dev/null && cow_clone "$ROOT/ios/Pods" ios/Pods
+    then say "ios/Pods cloned"; else ( cd ios && pod install ) 2>/dev/null || say "pod install skipped"; fi
+  fi
+fi
+if [ -f composer.json ]; then       # Laravel / PHP
+  if cmp -s composer.lock "$ROOT/composer.lock" 2>/dev/null && cow_clone "$ROOT/vendor" ./vendor
+  then say "vendor cloned (lockfile unchanged)"; else composer install --prefer-dist --no-interaction; fi
+fi
+# Rust: NO target/ clone on purpose — sccache (exported in the engineer's shell, primed by the warm
+# step) already shares crate/dep compilation from a single bounded cache; cloning a multi-GB target/
+# per worktree is redundant, blows up disk, and can tear if ROOT is mid-build. Go: GOCACHE/GOMODCACHE
+# already global. Nothing to seed for either.
+exit 0`
+
+// Short instruction injected into the two build briefs — invoke the tested script, with a plain-install
+// fallback and the one Rust env line. The disabled branch is ~today's setup text (no behavior change).
+const WORKTREE_SEED = WARM_WORKTREE
+  ? `FAST WORKTREE SETUP — this fresh checkout has empty deps/artifacts. Provision fast FIRST:
+  bash ${ROOT}/.ulpi/seed-worktree.sh ${ROOT}
+It CoW-clones node_modules / vendor / Pods from ${ROOT} (instant on the same volume; auto-falls back to a frozen install cross-volume). If that script is ABSENT or errors, do a normal frozen install yourself (pnpm i --frozen-lockfile / npm ci / yarn --immutable / composer install --prefer-dist). For a Rust/Cargo task there is NOTHING to clone — instead \`export RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0\` in your build shell BEFORE the validate/build (raw cargo AND any wrapper script that calls cargo inherit it) so crate compilation is shared via sccache. ${ENV_AND_SERVICES}`
+  : `WORKTREE SETUP (this is a fresh checkout — it may lack deps/env): if your validate needs them and node_modules is absent, run \`pnpm install --frozen-lockfile\` (or the repo's documented install); ${ENV_AND_SERVICES}`
+
+// Warm brief: write the seed script + make ROOT seed-ready. Started EARLY (after preflight) so it
+// overlaps the LLM-bound plan + plan-review phases and is normally done before the build fans out.
+const warmBrief = `Prepare fast worktree provisioning for the build — do NOT edit any SOURCE file. Two steps, in ${ROOT} on ${WORKING_BRANCH}:
+1. Create ${ROOT}/.ulpi/ if needed; ensure ${ROOT}/.ulpi/.gitignore exists containing a single \`*\` line (so nothing under .ulpi — this script included — is ever committed); then write this EXACT content to ${ROOT}/.ulpi/seed-worktree.sh and \`chmod +x\` it:
+=== BEGIN seed-worktree.sh ===
+${SEED_SCRIPT}
+=== END seed-worktree.sh ===
+2. Make ${ROOT} itself seed-ready so those clones have a warm tree to copy (best-effort; skip what does not apply; never fail the run):
+   • package.json present & node_modules absent → frozen install (pnpm i --frozen-lockfile / npm ci / yarn --immutable).
+   • composer.json present & vendor absent → composer install --prefer-dist.
+   • ios/Podfile present & ios/Pods absent → (cd ${ROOT}/ios && pod install).
+   • Cargo.toml present → if sccache is installed: \`sccache --start-server\`, then \`RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --manifest-path ${ROOT}/Cargo.toml --workspace\` (tail the output) so ${ROOT}/target AND the shared compiler cache are warm; then report the \`sccache --show-stats\` hit/miss line.
+   • Go / other → nothing (caches already global).
+Report ok:true when done (even with build errors — whatever compiled/installed is now seedable).`
 
 // ── retry transient failures (chiefly Claude API rate limits) ────────────────────
 // Under a rate-limit STORM whole waves of agents get rejected at the door (0 tokens) or cut off
@@ -433,7 +513,7 @@ ${t.stackSkill ? `If the ${t.stackSkill} skill is available here, you MUST use i
 Work in THIS isolated worktree. Base your task branch on the latest integrated state:
   git checkout -B ${branchFor(t)} ${WORKING_BRANCH}
 ${(t.dependsOn && t.dependsOn.length) ? `Your dependencies (${t.dependsOn.join(', ')}) are ALREADY merged into ${WORKING_BRANCH} — the build verified this before launching you, so their tables/rows/routes/exports exist in your branch. BUILD ON them; do NOT re-create or stub them, and import/consume them as the real thing.` : ''}
-WORKTREE SETUP (this is a fresh checkout — it may lack deps/env): if your validate needs them and node_modules is absent, run \`pnpm install --frozen-lockfile\` (or the repo's documented install); if your tests need env, the repo .env (when present) is at ${ROOT}/.env — symlink or copy it into the worktree (NEVER print, log, or inline secret VALUES; reference by location only). DB/Temporal/object-store services are expected to be running on the host — if a service the validate needs is unreachable, say so in notes and treat its failures as environment (preexisting), not your slice.
+${WORKTREE_SEED}
 Edit ONLY: ${(t.writeScope || []).join(', ')}. Honor the locked rules: ${HARD_RULES}.
 Meet ALL acceptance criteria: ${(t.acceptance || []).join(' | ')}.
 COMMIT YOUR WORK NO MATTER WHAT — as soon as your slice is implemented, commit it so it is never lost:
@@ -536,7 +616,7 @@ another task owns = OBSERVATION).`
 function fixBrief(t, findings, n) {
   return `Fix ${t.id} for these reviewer findings. In THIS isolated worktree, branch off the latest:
   git checkout -B ${fixBranchFor(t, n)} ${WORKING_BRANCH}
-Edit ONLY ${(t.writeScope || []).join(', ')}. ${t.stackSkill ? `Use the ${t.stackSkill} skill. ` : ''}Make
+${WARM_WORKTREE ? WORKTREE_SEED + '\n' : ''}Edit ONLY ${(t.writeScope || []).join(', ')}. ${t.stackSkill ? `Use the ${t.stackSkill} skill. ` : ''}Make
 ${t.validate} pass, then commit with a ${t.id}:-prefixed message so the reviewer can find this fix:
   git add -A && git commit -m "${t.id}: fix${n} — <one-line summary>"
 Findings: ${JSON.stringify(findings)}. Report status/validatePassed/filesTouched.`
@@ -875,6 +955,17 @@ const BASE_SHA = (pre && typeof pre.baseSha === 'string' && pre.baseSha.trim()) 
 // Clear dangling build worktrees from prior runs BEFORE building, so the integrate validate starts clean.
 await cleanupWorktrees('preflight')
 
+// FAST-WORKTREE WARM (started EARLY, on purpose): write the seed script + make ROOT seed-ready NOW,
+// concurrently with the LLM-bound plan + plan-review phases. The warm is local CPU (install / cargo
+// build), so its cost hides behind planning latency and is normally finished before the build fans
+// out. Best-effort: a failure just means engineers fall back to a normal install. Awaited at the
+// build gate below, where it is almost always already resolved (~0 added wall-clock). NOTE: this mainly
+// helps FRESH plan runs — on RESUME, planning is near-instant (little to overlap) and sccache is already
+// warm from earlier runs, so the warm is a cheap near-noop there; kept because it is harmless.
+const warmPromise = WARM_WORKTREE
+  ? rAgent(warmBrief, { label: 'worktree-warm', phase: 'Build', schema: STATUS_ACK, agentType: 'general-purpose' }).catch(() => null)
+  : null
+
 // Derive parallel execution layers as a topological sort of dependsOn (by levels). Returns null on a
 // cycle (no valid build order). Only considers in-plan deps. Used when a plan has no explicit layers, so
 // a dependency-bearing plan is still built in correct DAG order instead of collapsed into one layer.
@@ -1022,6 +1113,7 @@ if (!RESUME_PLAN && PLAN_REVIEW !== 'skip') {
 }
 
 phase('Build')                                             // steps 10–11
+if (warmPromise) await warmPromise                         // started right after preflight; normally already done
 const buildLog = await buildPlan(plan, priorStatus)        // priorStatus (read above) → skip work already done
 await statusStep({ phases: { build: { status: 'done' } } }, 'build-done')
 
