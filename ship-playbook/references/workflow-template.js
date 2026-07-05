@@ -134,7 +134,7 @@ if [ -f Cargo.toml ]; then          # Rust / Cargo — NO target/ clone (redunda
   if command -v sccache >/dev/null 2>&1; then
     mkdir -p .cargo
     if [ ! -f .cargo/config.toml ] && [ ! -f .cargo/config ]; then
-      printf '[build]\\nrustc-wrapper = "sccache"\\nincremental = false\\n' > .cargo/config.toml
+      printf '[build]\\nrustc-wrapper = "sccache"\\nincremental = false\\n\\n[env]\\nCARGO_INCREMENTAL = { value = "0", force = true }\\n' > .cargo/config.toml
       ex=$(git rev-parse --git-path info/exclude 2>/dev/null)
       [ -n "$ex" ] && ! grep -qx '.cargo/config.toml' "$ex" 2>/dev/null && printf '.cargo/config.toml\\n' >> "$ex"
       say "cargo wired to sccache (worktree .cargo/config.toml, git-excluded)"

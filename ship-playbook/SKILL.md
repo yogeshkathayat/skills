@@ -1,6 +1,6 @@
 ---
 name: ship-playbook
-version: 1.13.0
+version: 1.13.1
 description: |
   Take one feature request and run the entire delivery playbook automatically: plan it, review the
   plan, build it task by task, review the build, and optionally audit it for launch — then return the
